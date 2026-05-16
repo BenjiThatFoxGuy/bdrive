@@ -80,7 +80,7 @@ export const SettingsField = memo(
               isInvalid={Boolean(error)}
               isDisabled={disabled}
             >
-              <InputGroup variant="secondary">
+              <InputGroup >
                 <InputGroup.Input
                   placeholder={config.placeholder}
                   type={config.type === "text" ? undefined : config.type}
@@ -99,7 +99,7 @@ export const SettingsField = memo(
               isInvalid={Boolean(error)}
               isDisabled={disabled}
             >
-              <InputGroup variant="secondary">
+              <InputGroup >
                 <InputGroup.Input type="number" placeholder={config.placeholder} />
               </InputGroup>
               {error && <FieldError>{error}</FieldError>}
@@ -110,7 +110,6 @@ export const SettingsField = memo(
           return (
             <Select
               aria-label={config.label}
-              variant="secondary"
               value={localValue != null ? String(localValue) : null}
               onChange={(key) => {
                 if (key !== null) {

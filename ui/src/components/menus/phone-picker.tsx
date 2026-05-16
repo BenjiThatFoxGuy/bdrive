@@ -57,7 +57,6 @@ export const PhoneNoPicker = memo(({ field }: PhoneNoPickerProps) => {
             placeholder="Search country..."
             className="w-full px-2 pt-2"
             onChange={(e) => setValue(e.target.value)}
-            variant="secondary"
           />
           <ListBox
             aria-label="Country Code"

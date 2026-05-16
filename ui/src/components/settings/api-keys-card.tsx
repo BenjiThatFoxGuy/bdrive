@@ -7,6 +7,7 @@ import {
 } from "@heroui/react"
 import { Button } from "@heroui/react"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
+import clsx from "clsx"
 import toast from "react-hot-toast"
 
 import { $api } from "@/utils/api"
@@ -14,14 +15,21 @@ import { copyDataToClipboard } from "@/utils/common"
 
 function formatDate(value?: string) {
   if (!value) {return "Never"}
-  return new Date(value).toLocaleString(undefined, {
+  return new Date(value).toLocaleDateString(undefined, {
     day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
     month: "short",
     year: "numeric",
   })
 }
+
+const expiryOptions = [
+  { value: "none", label: "Never" },
+  { value: "7", label: "7 days" },
+  { value: "30", label: "30 days" },
+  { value: "90", label: "90 days" },
+  { value: "180", label: "180 days" },
+  { value: "365", label: "1 year" },
+] as const
 
 function ApiKeysCardInner() {
   const queryClient = useQueryClient()
@@ -30,7 +38,7 @@ function ApiKeysCardInner() {
   const { data, isLoading } = useQuery(listOptions)
 
   const [name, setName] = useState("")
-  const [expiryPreset, setExpiryPreset] = useState<"none" | "7" | "30" | "90">("none")
+  const [expiryPreset, setExpiryPreset] = useState<"none" | "7" | "30" | "90" | "180" | "365">("none")
   const [createdKey, setCreatedKey] = useState("")
   const [revokingID, setRevokingID] = useState<string | null>(null)
   const [showCreate, setShowCreate] = useState(false)
@@ -59,7 +67,7 @@ function ApiKeysCardInner() {
 
   return (
     <div className="bg-surface rounded-3xl p-6 border border-border/50">
-      <div className="flex items-start justify-between gap-3 mb-4">
+      <div className="flex items-start justify-between gap-3 mb-6">
         <div>
           <h3 className="text-xl font-semibold mb-1">API Keys</h3>
           <p className="text-sm text-muted">
@@ -74,28 +82,34 @@ function ApiKeysCardInner() {
       </div>
 
       {showCreate && (
-      <div className="mb-4 rounded-2xl border border-border/40 bg-surface p-4 space-y-3">
+      <div className="mb-6 rounded-2xl border border-border/40 bg-surface-secondary p-4 space-y-4">
+        <p className="text-sm font-medium">New API Key</p>
           <Input
-            variant="secondary"
-            value={name} onChange={(e) => setName(e.target.value)}
-            placeholder="CI deploy"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder="e.g. CI deploy"
           />
 
           <RadioGroup
-            value={expiryPreset} onChange={(v) => setExpiryPreset(v as "none" | "7" | "30" | "90")}
+            value={expiryPreset} onChange={(v) => setExpiryPreset(v as "none" | "7" | "30" | "90" | "180" | "365")}
+            orientation="horizontal"
           >
-            <Radio value="none">No expiration</Radio>
-            <Radio value="7">7 days</Radio>
-            <Radio value="30">30 days</Radio>
-            <Radio value="90">90 days</Radio>
+            {expiryOptions.map((opt) => (
+              <Radio key={opt.value} value={opt.value}>
+                <Radio.Control>
+                  <Radio.Indicator />
+                </Radio.Control>
+                {opt.label}
+              </Radio>
+            ))}
           </RadioGroup>
 
-          <div className="flex justify-end">
+          <div className="flex justify-end gap-2 pt-1">
             <Button variant="ghost" onPress={() => setShowCreate(false)}>
               Cancel
             </Button>
             <Button
-              variant="secondary" isDisabled={!name.trim()}
+              isDisabled={!name.trim()}
               onPress={() => {
                 const body: { name: string; expiresAt?: string } = { name: name.trim() }
                 if (expiryPreset !== "none") {
@@ -106,15 +120,15 @@ function ApiKeysCardInner() {
                 createMutation.mutate({ body })
               }}
             >
-              Create API Key
+              Create
             </Button>
           </div>
       </div>
       )}
 
       {createdKey && (
-        <div className="mb-4 rounded-2xl border border-accent/30 bg-accent/10 p-4">
-          <p className="text-sm text-foreground mb-2">New key (shown once):</p>
+        <div className="mb-6 rounded-2xl border border-accent/30 bg-accent/10 p-4">
+          <p className="text-sm font-medium mb-2">Key created — copy it now (shown once):</p>
           <div className="rounded-xl border border-border/40 bg-surface p-3 font-mono text-sm break-all mb-3">
             {createdKey}
           </div>
@@ -138,45 +152,51 @@ function ApiKeysCardInner() {
           <Spinner />
         </div>
       ) : (data && data.length > 0 ? (
-        <div className="space-y-3">
-          {data.map((key) => (
-            <div
-              key={key.id}
-              className="grid grid-cols-1 md:grid-cols-[1.2fr_1fr_1fr_1fr_auto] gap-3 rounded-2xl border border-border/30 bg-surface p-4"
-            >
-              <div>
-                <p className="text-xs text-muted">Name</p>
-                <p className="font-medium">{key.name}</p>
-              </div>
-              <div>
-                <p className="text-xs text-muted">Created</p>
-                <p>{formatDate(key.createdAt)}</p>
-              </div>
-              <div>
-                <p className="text-xs text-muted">Expires</p>
-                <p>{formatDate(key.expiresAt || undefined)}</p>
-              </div>
-              <div>
-                <p className="text-xs text-muted">Last used</p>
-                <p>{formatDate(key.lastUsedAt || undefined)}</p>
-              </div>
-              <div className="flex items-center justify-end">
+        <div className="space-y-2">
+          {data.map((key) => {
+            const now = Date.now()
+            const expired = key.expiresAt && new Date(key.expiresAt).getTime() < now
+            return (
+              <div
+                key={key.id}
+                className="flex items-center justify-between gap-4 rounded-2xl bg-surface-secondary p-4"
+              >
+                <div className="flex items-center gap-3 min-w-0 flex-1">
+                  <div
+                    className={clsx(
+                      "size-2 shrink-0 rounded-full",
+                      expired ? "bg-danger" : "bg-success",
+                    )}
+                  />
+                  <div className="min-w-0">
+                    <p className="font-medium truncate">{key.name}</p>
+                    <p className="text-sm text-muted truncate">
+                      Created {formatDate(key.createdAt)}
+                      {key.expiresAt && <> &middot; Expires {formatDate(key.expiresAt)}</>}
+                      {key.lastUsedAt && <> &middot; Used {formatDate(key.lastUsedAt)}</>}
+                    </p>
+                  </div>
+                </div>
                 <Button
                   variant="ghost"
+                  size="sm"
+                  className="shrink-0 text-muted hover:text-danger"
+                  isDisabled={revokingID === key.id}
                   onPress={() => {
                     setRevokingID(key.id)
                     revokeMutation.mutate({ params: { path: { id: key.id } } })
                   }}
                 >
-                  Revoke
+                  {revokingID === key.id ? "Revoking..." : "Revoke"}
                 </Button>
               </div>
-            </div>
-          ))}
+            )
+          })}
         </div>
       ) : (
-        <div className="rounded-2xl border-2 border-dashed border-border/30 bg-surface/50 p-6 text-sm text-muted text-center">
-          No API keys yet.
+        <div className="rounded-2xl border-2 border-dashed border-border/30 bg-surface/50 p-8 text-center">
+          <p className="text-sm text-muted mb-1">No API keys yet</p>
+          <p className="text-xs text-muted/60">Create one to access the API programmatically.</p>
         </div>
       ))}
     </div>

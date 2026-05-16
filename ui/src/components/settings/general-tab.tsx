@@ -46,7 +46,7 @@ export const GeneralTab = memo(() => {
         return (
           <div
             key={category}
-            className="bg-surface rounded-3xl p-6 border border-border/50 flex flex-col gap-6"
+            className="rounded-3xl p-6 bg-surface border border-border flex flex-col gap-6"
           >
             <div className="flex items-start gap-4">
               <div className="p-3 rounded-2xl bg-accent-soft">

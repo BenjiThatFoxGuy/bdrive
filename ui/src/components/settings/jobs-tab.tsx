@@ -1,11 +1,14 @@
 import { memo } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Spinner } from "@heroui/react";
+import clsx from "clsx";
 import toast from "react-hot-toast";
 
 import { Button } from "@heroui/react";
 import type { components } from "@/lib/api";
 import { $api } from "@/utils/api";
+import { scrollbarClasses } from "@/utils/classes";
+import MaterialSymbolsScheduleRounded from "~icons/material-symbols/schedule-rounded";
 
 type PeriodicJobSummary = components["schemas"]["PeriodicJobSummary"];
 
@@ -63,35 +66,74 @@ export const JobsTab = memo(() => {
   const jobs = jobsQuery.data ?? [];
 
   return (
-    <div className="flex h-full flex-col gap-4 overflow-auto p-2">
-      <div>
-        <h2 className="text-xl font-semibold">Background Jobs</h2>
-        <p className="text-sm text-muted">Cron-managed maintenance jobs for this instance.</p>
-      </div>
+    <div className={clsx("flex flex-col gap-6 p-4 h-full overflow-y-auto", scrollbarClasses)}>
+      <div className="bg-surface rounded-3xl p-6 border border-border/50">
+        <div className="flex items-start gap-4 mb-6">
+          <div className="p-3 rounded-2xl bg-surface-secondary text-surface-secondary-foreground">
+            <MaterialSymbolsScheduleRounded className="size-6" />
+          </div>
+          <div className="flex-1 min-w-0">
+            <h3 className="text-xl font-semibold mb-1">Background Jobs</h3>
+            <p className="text-sm text-muted">
+              Cron-managed maintenance jobs for this instance.
+            </p>
+          </div>
+        </div>
 
-      <div className="grid gap-3">
-        {jobs.map((job) => (
-          <section key={job.id} className="rounded-xl border border-border/30 bg-surface-secondary p-4">
-            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-              <div className="min-w-0 space-y-1">
-                <h3 className="font-medium">{job.name || kindLabel[job.kind]}</h3>
-                <p className="text-sm text-muted">{kindLabel[job.kind]}</p>
-                <p className="text-sm text-muted">Cron: {job.cronExpression}</p>
-                <p className="text-sm text-muted">Next run: {formatDate(job.nextRunAt)}</p>
-                <p className="text-sm text-muted">Last run: {formatDate(job.lastRunAt)}</p>
-                {job.lastState && <p className="text-sm text-muted">Last state: {job.lastState}</p>}
-                {job.lastError && <p className="text-sm text-danger">{job.lastError}</p>}
+        {jobs.length > 0 ? (
+          <div className="space-y-2">
+            {jobs.map((job) => (
+              <div
+                key={job.id}
+                className="bg-surface-secondary rounded-2xl p-4 border border-border/30 transition-colors hover:border-border/60"
+              >
+                <div className="flex items-center justify-between gap-4">
+                  <div className="flex items-center gap-3 min-w-0 flex-1">
+                    <div
+                      className={clsx(
+                        "size-2 shrink-0 rounded-full",
+                        job.enabled ? "bg-success" : "bg-muted",
+                      )}
+                    />
+                    <div className="min-w-0">
+                      <p className="font-medium">{job.name || kindLabel[job.kind]}</p>
+                      <p className="text-sm text-muted truncate">
+                        {kindLabel[job.kind]}
+                        {job.lastState && <> &middot; {job.lastState}</>}
+                        {job.nextRunAt && <> &middot; Next {formatDate(job.nextRunAt)}</>}
+                        {job.lastRunAt && <> &middot; Last {formatDate(job.lastRunAt)}</>}
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex shrink-0 gap-2">
+                    <Button
+                      variant={job.enabled ? "ghost" : "secondary"}
+                      size="sm"
+                      onPress={() => toggleJob(job)}
+                    >
+                      {job.enabled ? "Disable" : "Enable"}
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onPress={() => runJob(job)}
+                    >
+                      Run
+                    </Button>
+                  </div>
+                </div>
+                {job.lastError && (
+                  <p className="mt-2 text-sm text-danger truncate">{job.lastError}</p>
+                )}
               </div>
-              <div className="flex shrink-0 gap-2">
-                <Button variant="outline" onPress={() => toggleJob(job)}>
-                  {job.enabled ? "Disable" : "Enable"}
-                </Button>
-                <Button onPress={() => runJob(job)}>Run now</Button>
-              </div>
-            </div>
-          </section>
-        ))}
-        {jobs.length === 0 && <p className="text-sm text-muted">No periodic jobs configured.</p>}
+            ))}
+          </div>
+        ) : (
+          <div className="rounded-2xl border-2 border-dashed border-border/30 bg-surface/50 p-8 text-center">
+            <p className="text-sm text-muted mb-1">No jobs configured</p>
+            <p className="text-xs text-muted/60">Periodic maintenance jobs will appear here.</p>
+          </div>
+        )}
       </div>
     </div>
   );

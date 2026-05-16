@@ -90,7 +90,7 @@ function ShareAccess({ id, setUnlocked, setShareUnlocked }: ShareAccessProps) {
             value={field.value}
             onChange={field.onChange}
           >
-            <InputGroup variant="secondary">
+            <InputGroup >
               <InputGroup.Input
                 ref={field.ref}
                 placeholder="Enter password"

@@ -59,51 +59,42 @@ const Session = memo(
     const queryClient = useQueryClient();
 
     return (
-      <div className="bg-surface rounded-2xl p-4 border border-border/30 transition-all duration-300 relative group">
-        <div className="flex items-start justify-between mb-3">
-          <div className="flex items-center gap-2">
+      <div className="bg-surface-secondary rounded-2xl p-4">
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex items-center gap-3 min-w-0 flex-1">
             <div
               className={clsx(
-                "w-2 h-2 rounded-full",
-                valid ? "bg-green-500" : "bg-red-500",
+                "size-2 shrink-0 rounded-full",
+                valid ? "bg-success" : "bg-danger",
               )}
             />
-            <p className="font-medium text-base">{appName || "Unknown"}</p>
-            {current && (
-              <span className="text-xs px-2 py-0.5 rounded-full bg-surface-secondary text-surface-secondary-foreground font-medium">
-                Current
-              </span>
-            )}
+            <div className="min-w-0">
+              <div className="flex items-center gap-2">
+                <p className="font-medium truncate">{appName || "Unknown"}</p>
+                {current && (
+                  <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-accent-soft text-accent-soft-foreground font-semibold uppercase tracking-wider">
+                    Current
+                  </span>
+                )}
+              </div>
+              <p className="text-sm text-muted truncate">
+                Created {formatDate(createdAt)}
+                {location && <> &middot; {location}</>}
+              </p>
+            </div>
           </div>
           {(!current || !valid) && (
             <Button
               isIconOnly
               variant="ghost"
               size="sm"
-              className="opacity-0 group-hover:opacity-100 transition-opacity"
+              className="shrink-0 text-muted hover:text-danger"
               onPress={() =>
                 deleteSession.mutateAsync({ params: { path: { id: sessionId } } })
               }
             >
-              <DeleteIcon className="size-5" />
+              <DeleteIcon className="size-4" />
             </Button>
-          )}
-        </div>
-
-        <div className="space-y-1.5">
-          <div className="flex items-center gap-2 text-sm text-muted">
-            <span>Created</span>
-            <span className="font-medium text-surface-foreground">•</span>
-            <span className="font-medium text-surface-foreground">
-              {formatDate(createdAt)}
-            </span>
-          </div>
-          {location && (
-            <div className="flex items-center gap-2 text-sm text-muted">
-              <span>Location</span>
-              <span className="font-medium text-surface-foreground">•</span>
-              <span className="font-medium text-surface-foreground">{location}</span>
-            </div>
           )}
         </div>
       </div>
@@ -145,7 +136,6 @@ const ChannelCreateDialog = ({ handleClose }: { handleClose: () => void }) => {
         <form id="add-channel" onSubmit={onCreate}>
           <Input
             className="border-large"
-            variant="secondary"
             placeholder="Channel Name"
             autoFocus
             value={channel}
@@ -161,7 +151,6 @@ const ChannelCreateDialog = ({ handleClose }: { handleClose: () => void }) => {
           type="submit"
           form="add-channel"
           className="font-normal"
-          variant="secondary"
           isDisabled={createChannel.isPending || !channel}
         >
           {createChannel.isPending ? "Creating" : "Create"}
@@ -619,7 +608,7 @@ export const AccountTab = memo(() => {
 
       <ApiKeysCard />
 
-      <div className="bg-background-secondary rounded-3xl p-6 border border-border/50">
+      <div className="bg-surface rounded-3xl p-6 border border-border/50">
         <div className="flex items-start gap-4 mb-6">
           <div className="p-3 rounded-2xl bg-surface-secondary text-surface-secondary-foreground">
             <IcRoundSecurity className="size-6" />

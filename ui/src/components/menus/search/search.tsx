@@ -221,7 +221,7 @@ export const SearchMenu = memo(({ isOpen, setIsOpen }: SearchMenuProps) => {
                   placeholder="Filename or regex..."
                   autoComplete="off"
                   autoFocus
-                  variant="secondary"
+
                   {...field}
                 />
               )}
@@ -325,7 +325,6 @@ export const SearchMenu = memo(({ isOpen, setIsOpen }: SearchMenuProps) => {
                   render={({ field }) => (
                     <Input
                       type="date"
-                      variant="secondary"
                       max={today}
                       {...field}
                     />
@@ -336,9 +335,7 @@ export const SearchMenu = memo(({ isOpen, setIsOpen }: SearchMenuProps) => {
                   control={control}
                   render={({ field }) => (
                     <Input
-                      type="date"
-                      variant="secondary"
-                      max={today}
+                      type="date"max={today}
                       {...field}
                     />
                   )}
@@ -351,9 +348,7 @@ export const SearchMenu = memo(({ isOpen, setIsOpen }: SearchMenuProps) => {
                 control={control}
                 render={() => (
                   <Input
-                    placeholder="/path/to/folder"
-                    variant="secondary"
-                  />
+                    placeholder="/path/to/folder"/>
                 )}
               />
             )}

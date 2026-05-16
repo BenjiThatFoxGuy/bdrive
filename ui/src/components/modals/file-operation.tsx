@@ -73,7 +73,6 @@ const RenameDialog = memo(({ queryKey, handleClose }: RenameDialogProps) => {
         <form id="rename-form" onSubmit={onRename}>
           <Input
             className="border-large"
-            variant="secondary"
             autoFocus
             value={currentFile.name}
             onChange={(e) => actions.setCurrentFile({ ...currentFile, name: e.target.value })}
@@ -145,7 +144,6 @@ const FolderCreateDialog = memo(({ queryKey, handleClose }: FolderCreateDialogPr
         <form id="create-folder-form" onSubmit={onCreate}>
           <Input
             className="border-large"
-            variant="secondary"
             placeholder="Folder Name or Path"
             autoFocus
             value={currentFile?.name}
@@ -159,9 +157,9 @@ const FolderCreateDialog = memo(({ queryKey, handleClose }: FolderCreateDialogPr
         </Button>
         <Button
           type="submit"
-          form="create-folder-form"
           className="font-normal"
           variant="secondary"
+          form="create-folder-form"
           isDisabled={createFolder.isPending || !currentFile.name}
         >
           {createFolder.isPending ? "Creating" : "Create"}
@@ -335,7 +333,6 @@ const ShareFileDialog = memo(({ handleClose }: ShareFileDialogProps) => {
             render={({ field }) => (
               <Input
                 className="col-span-6 xs:col-span-3"
-                variant="secondary"
                 type="date"
                 min={getNextDate()}
                 {...field}
@@ -353,7 +350,6 @@ const ShareFileDialog = memo(({ handleClose }: ShareFileDialogProps) => {
               <div className="col-span-6 xs:col-span-3 relative">
                 <Input
                   className="col-span-6 xs:col-span-3"
-                  variant="secondary"
                   autoComplete="off"
                   type={showPassword ? "text" : "password"}
                   {...field}
@@ -388,7 +384,6 @@ const ShareFileDialog = memo(({ handleClose }: ShareFileDialogProps) => {
         <Input
           disabled={isLoading || !data || data.length === 0}
           fullWidth
-          variant="secondary"
           readOnly
           value={shareLink}
         />

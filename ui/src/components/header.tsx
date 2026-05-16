@@ -77,7 +77,6 @@ const SearchBar = memo(({ className }: SearchBarProps) => {
       <div className={clsx("relative min-w-[15rem] max-w-96", className)}>
         <IconBiSearch className="absolute left-3 top-1/2 -translate-y-1/2 size-6 text-muted pointer-events-none" />
         <Input
-          variant="secondary"
           placeholder="Search... (Ctrl+K)"
           enterKeyHint="search"
           autoComplete="off"
