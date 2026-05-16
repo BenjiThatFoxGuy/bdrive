@@ -431,7 +431,7 @@ export const Login = memo(() => {
         onSubmit={handleSubmit(onSubmit)}
       >
         <div className="flex flex-col items-center gap-2">
-          <TelegramIcon className="size-14 text-primary" />
+          <TelegramIcon className="size-14 text-accent" />
           <h1 className="text-xl font-semibold">Sign in to TelDrive</h1>
           <p className="text-sm text-muted">Enter your Telegram account details</p>
         </div>
