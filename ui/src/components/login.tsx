@@ -446,7 +446,7 @@ export const Login = memo(() => {
                 render={({ field }) => (
                   <TextField isRequired className="w-full" name="phoneNumber">
                     <Label>Phone Number</Label>
-                    <InputGroup>
+                    <InputGroup variant="secondary">
                       <InputGroup.Prefix>
                         <Controller
                           name="phoneCode"
@@ -478,7 +478,7 @@ export const Login = memo(() => {
                 render={({ field }) => (
                   <TextField isRequired className="w-full" name="otpCode">
                     <Label>OTP Code</Label>
-                    <Input placeholder="Enter the code" {...field} />
+                    <Input variant="secondary" placeholder="Enter the code" {...field} />
                     <FieldError />
                   </TextField>
                 )}
@@ -492,7 +492,7 @@ export const Login = memo(() => {
                 render={({ field }) => (
                   <TextField isRequired className="w-full" name="password">
                     <Label>2FA Password</Label>
-                    <Input placeholder="Enter your 2FA password" type="password" {...field} />
+                    <Input variant="secondary" placeholder="Enter your 2FA password" type="password" {...field} />
                     <FieldError />
                   </TextField>
                 )}
