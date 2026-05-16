@@ -3,17 +3,13 @@ package integration_test
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"io"
-	"time"
 
 	"github.com/gotd/contrib/storage"
 	"github.com/gotd/td/session"
 	"github.com/gotd/td/telegram/auth/qrlogin"
 	"github.com/gotd/td/tg"
-	"github.com/riverqueue/river"
-	"github.com/riverqueue/river/rivertype"
 	"github.com/tgdrive/teldrive/internal/api"
 	"github.com/tgdrive/teldrive/internal/events"
 	"github.com/tgdrive/teldrive/pkg/dto"
@@ -295,47 +291,3 @@ func (n *noopEventBroadcaster) Subscribe(int64, []events.EventType) chan dto.Eve
 func (n *noopEventBroadcaster) Unsubscribe(int64, chan dto.Event)           {}
 func (n *noopEventBroadcaster) Record(events.EventType, int64, *dto.Source) {}
 func (n *noopEventBroadcaster) Shutdown()                                   {}
-
-type noopJobClient struct{}
-
-func newNoopJobClient() *noopJobClient { return &noopJobClient{} }
-
-func (n *noopJobClient) Insert(_ context.Context, args river.JobArgs, _ *river.InsertOpts) (*rivertype.JobInsertResult, error) {
-	encodedArgs, err := json.Marshal(args)
-	if err != nil {
-		return nil, err
-	}
-	now := time.Now().UTC()
-	return &rivertype.JobInsertResult{Job: &rivertype.JobRow{
-		ID:          1,
-		Kind:        args.Kind(),
-		Queue:       river.QueueDefault,
-		State:       rivertype.JobStateAvailable,
-		Attempt:     0,
-		MaxAttempts: 25,
-		EncodedArgs: encodedArgs,
-		CreatedAt:   now,
-		ScheduledAt: now,
-		Metadata:    []byte(`{}`),
-	}}, nil
-}
-
-func (n *noopJobClient) JobList(context.Context, *river.JobListParams) (*river.JobListResult, error) {
-	return &river.JobListResult{Jobs: nil, LastCursor: nil}, nil
-}
-
-func (n *noopJobClient) JobGet(context.Context, int64) (*rivertype.JobRow, error) {
-	return nil, rivertype.ErrNotFound
-}
-
-func (n *noopJobClient) JobUpdate(context.Context, int64, *river.JobUpdateParams) (*rivertype.JobRow, error) {
-	return nil, rivertype.ErrNotFound
-}
-
-func (n *noopJobClient) JobCancel(context.Context, int64) (*rivertype.JobRow, error) {
-	return nil, rivertype.ErrNotFound
-}
-
-func (n *noopJobClient) JobDelete(context.Context, int64) (*rivertype.JobRow, error) {
-	return nil, rivertype.ErrNotFound
-}

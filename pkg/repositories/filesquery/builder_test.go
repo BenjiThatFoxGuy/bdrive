@@ -67,7 +67,7 @@ func TestBuilder_Build_FindQuery(t *testing.T) {
 	}
 
 	sql, args := stmt.Sql()
-	if !strings.Contains(sql, "teldrive.clean_name") {
+	if !strings.Contains(sql, "clean_name") {
 		t.Errorf("Build() should contain full-text search, got: %s", sql)
 	}
 

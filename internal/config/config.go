@@ -56,28 +56,13 @@ type ServerCmdConfig struct {
 	TG     TGConfig
 	Cache  CacheConfig
 	Redis  RedisConfig
-	Queue  QueueConfig
-	Jobs   JobsConfig
+	Worker WorkerConfig
 	Events EventConfig
 }
 
-type QueueConfig struct {
-	DefaultWorkers int `default:"50" description:"Maximum number of workers for the default task queue"`
-	UploadWorkers  int `default:"4" description:"Maximum number of workers for the uploads task queue"`
-}
-
-type JobsConfig struct {
-	SyncRun      SyncRunJobConfig
-	SyncTransfer SyncTransferJobConfig
-}
-
-type SyncRunJobConfig struct {
-	MaxAttempts int `default:"8" description:"Maximum retry attempts for sync.run jobs"`
-}
-
-type SyncTransferJobConfig struct {
-	MaxAttempts int           `default:"2" description:"Maximum retry attempts for sync.transfer jobs"`
-	Timeout     time.Duration `default:"3h" description:"Maximum execution time for sync.transfer jobs"`
+type WorkerConfig struct {
+	CronPollEvery time.Duration `default:"30s" description:"Cron background job poll interval"`
+	CronLockID    int64         `default:"2123216947" description:"PostgreSQL advisory lock ID for cron background jobs"`
 }
 
 type CheckCmdConfig struct {
@@ -160,6 +145,7 @@ type DBPool struct {
 }
 type DBConfig struct {
 	DataSource  string `validate:"required" default:"" description:"Database connection string"`
+	Schema      string `default:"teldrive" description:"Database schema name"`
 	PrepareStmt bool   `default:"true" description:"Use prepared statements"`
 	Pool        DBPool
 }

@@ -12,8 +12,6 @@ import (
 	"github.com/go-chi/chi/v5"
 	chimiddleware "github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
-	"github.com/jackc/pgx/v5"
-	"github.com/riverqueue/river"
 	"github.com/tgdrive/teldrive/internal/api"
 	"github.com/tgdrive/teldrive/internal/auth"
 	"github.com/tgdrive/teldrive/internal/banner"
@@ -27,9 +25,9 @@ import (
 	"github.com/tgdrive/teldrive/internal/requestmeta"
 	"github.com/tgdrive/teldrive/internal/tgc"
 	"github.com/tgdrive/teldrive/internal/version"
-	"github.com/tgdrive/teldrive/pkg/queue"
 	"github.com/tgdrive/teldrive/pkg/repositories"
 	"github.com/tgdrive/teldrive/pkg/services"
+	"github.com/tgdrive/teldrive/pkg/worker"
 	"github.com/tgdrive/teldrive/ui"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
@@ -87,7 +85,7 @@ func New(ctx context.Context, cfg *config.ServerCmdConfig) (_ *App, err error) {
 	}
 	cleanups = append(cleanups, pool.Close)
 
-	if err := database.MigrateDB(pool, true); err != nil {
+	if err := database.MigrateDB(pool); err != nil {
 		return nil, fmt.Errorf("migrate database: %w", err)
 	}
 	repos := repositories.NewRepositories(pool)
@@ -111,7 +109,7 @@ func New(ctx context.Context, cfg *config.ServerCmdConfig) (_ *App, err error) {
 	}, logging.Component("EVENT"))
 	cleanups = append(cleanups, broadcaster.Shutdown)
 
-	httpServer, riverClient, err := buildHTTPServer(cfg, repos, cacher, log, botSelector, broadcaster)
+	httpServer, bgWorker, err := buildServer(ctx, cfg, repos, cacher, log, botSelector, broadcaster)
 	if err != nil {
 		return nil, err
 	}
@@ -134,15 +132,11 @@ func New(ctx context.Context, cfg *config.ServerCmdConfig) (_ *App, err error) {
 			broadcaster.Shutdown()
 			return nil
 		}},
-		{Name: "queue", Start: func(ctx context.Context) error {
-			if err := riverClient.Start(ctx); err != nil {
-				return fmt.Errorf("start queue: %w", err)
-			}
+		{Name: "worker", Start: func(ctx context.Context) error {
+			bgWorker.Start()
 			return nil
 		}, Stop: func(ctx context.Context) error {
-			if err := riverClient.Stop(ctx); err != nil {
-				return fmt.Errorf("stop queue: %w", err)
-			}
+			bgWorker.Stop()
 			return nil
 		}},
 		{Name: "http", Start: func(context.Context) error {
@@ -256,22 +250,24 @@ func findAvailablePort(startPort int) (int, error) {
 	return 0, fmt.Errorf("no available ports found between %d and %d", startPort, startPort+100)
 }
 
-func buildHTTPServer(cfg *config.ServerCmdConfig, repos *repositories.Repositories, cacher cache.Cacher, log *zap.Logger, botSelector tgc.BotSelector, broadcaster events.EventBroadcaster) (*http.Server, *river.Client[pgx.Tx], error) {
+func buildServer(ctx context.Context, cfg *config.ServerCmdConfig, repos *repositories.Repositories, cacher cache.Cacher, log *zap.Logger, botSelector tgc.BotSelector, broadcaster events.EventBroadcaster) (*http.Server, *worker.Worker, error) {
 	channelManager := tgc.NewChannelManager(repos, cacher, &cfg.TG)
 	telegramService := services.NewTelegramService(repos, cacher, &cfg.TG, botSelector)
-	jobClientRef := services.NewJobClientRef()
-	periodicRegistryRef := services.NewPeriodicJobRegistryRef()
 
-	apiSrv := services.NewApiService(repos, channelManager, cfg, cacher, telegramService, broadcaster, jobClientRef, periodicRegistryRef)
-	riverClient, err := queue.NewClient(repos.Pool, services.NewJobExecutor(apiSrv), cfg.Queue, cfg.Jobs)
-	if err != nil {
-		return nil, nil, fmt.Errorf("create river client: %w", err)
+	// Create worker store (shared between API and worker pool)
+	workerStore := worker.NewStore(repos.Pool)
+
+	apiSrv := services.NewApiService(repos, channelManager, cfg, cacher, telegramService, broadcaster, workerStore)
+
+	// Create job executor and worker pool
+	jobExec := services.NewJobExecutor(apiSrv)
+
+	workerCfg := worker.Config{
+		CronPollEvery: cfg.Worker.CronPollEvery,
+		CronLockID:    cfg.Worker.CronLockID,
 	}
-	jobClientRef.Set(riverClient)
-	periodicRegistryRef.Set(riverClient.PeriodicJobs())
-	if err := apiSrv.RegisterPeriodicJobs(context.Background()); err != nil {
-		return nil, nil, fmt.Errorf("register periodic jobs: %w", err)
-	}
+
+	bgWorker := worker.New(repos.Pool, jobExec.WorkerHandlers(), workerCfg, log)
 
 	sec := auth.NewSecurityHandler(repos.Sessions, repos.APIKeys, cacher, &cfg.JWT)
 	rawSrv := services.NewRawService(apiSrv)
@@ -307,5 +303,5 @@ func buildHTTPServer(cfg *config.ServerCmdConfig, repos *repositories.Repositori
 		WriteTimeout:      cfg.Server.WriteTimeout,
 		ReadHeaderTimeout: defaultReadHeaderTimeout,
 		IdleTimeout:       defaultIdleTimeout,
-	}, riverClient, nil
+	}, bgWorker, nil
 }

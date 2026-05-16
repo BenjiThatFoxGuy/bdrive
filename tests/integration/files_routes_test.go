@@ -142,11 +142,4 @@ func TestFilesRoutes_Validation(t *testing.T) {
 		}
 	})
 
-	t.Run("JobsInsert unknown kind => 400", func(t *testing.T) {
-		_, err := client.JobsInsert(ctx, &api.JobInsertRequest{Kind: "unknown.kind", Args: []byte("{}")})
-		if statusCode(err) != 400 {
-			t.Fatalf("expected 400, got %d err=%v", statusCode(err), err)
-		}
-	})
-
 }

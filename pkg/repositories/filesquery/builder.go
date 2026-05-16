@@ -243,7 +243,7 @@ func (b *Builder) buildSearchCondition(search SearchParams) postgres.BoolExpress
 		)
 	default:
 		return postgres.RawBool(
-			"teldrive.clean_name(files.name) &@~ teldrive.clean_name(#searchQuery)",
+			"clean_name(files.name) &@~ clean_name(#searchQuery)",
 			postgres.RawArgs{"#searchQuery": search.Query},
 		)
 	}

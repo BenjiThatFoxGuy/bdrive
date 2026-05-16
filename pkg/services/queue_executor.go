@@ -7,96 +7,71 @@ import (
 	"strings"
 	"time"
 
-	"github.com/riverqueue/river"
 	"github.com/tgdrive/teldrive/internal/auth"
 	"github.com/tgdrive/teldrive/internal/config"
 	internalduration "github.com/tgdrive/teldrive/internal/duration"
 	"github.com/tgdrive/teldrive/internal/tgc"
-	"github.com/tgdrive/teldrive/pkg/queue"
 	"github.com/tgdrive/teldrive/pkg/repositories"
+	"github.com/tgdrive/teldrive/pkg/worker"
 )
 
 type jobExecutor struct {
 	api *apiService
 }
 
-func NewJobExecutor(apiSvc *apiService) queue.Executor {
+func NewJobExecutor(apiSvc *apiService) *jobExecutor {
 	return &jobExecutor{api: apiSvc}
 }
 
-func writeJobProgress(ctx context.Context, done, total int, results []map[string]any) error {
-	percent := 0
-	if total > 0 {
-		percent = int(float64(done) * 100.0 / float64(total))
+// WorkerHandlers returns the registered cron background job handlers.
+func (e *jobExecutor) WorkerHandlers() []worker.HandlerDef {
+	return []worker.HandlerDef{
+		{Kind: "clean.old_events", Handler: e.handleCleanOldEvents},
+		{Kind: "clean.stale_uploads", Handler: e.handleCleanStaleUploads},
+		{Kind: "clean.pending_files", Handler: e.handleCleanPendingFiles},
+		{Kind: "refresh.folder_sizes", Handler: e.handleRefreshFolderSizes},
 	}
-
-	return river.RecordOutput(ctx, map[string]any{
-		"progress": map[string]any{
-			"total":   total,
-			"done":    done,
-			"percent": percent,
-		},
-		"data": map[string]any{
-			"results":     results,
-			"updatedAt":   time.Now().UTC(),
-			"isCompleted": done == total,
-		},
-	})
 }
 
-func writeJobByteProgress(ctx context.Context, done, total int64, results []map[string]any) error {
-	percent := 0
-	if total > 0 {
-		percent = int(float64(done) * 100.0 / float64(total))
-		if percent > 100 {
-			percent = 100
+func (e *jobExecutor) handleCleanOldEvents(ctx context.Context, job *worker.Job) error {
+	var args struct {
+		UserID    int64  `json:"userId"`
+		Retention string `json:"retention"`
+	}
+	if err := json.Unmarshal(job.Args, &args); err != nil {
+		return fmt.Errorf("invalid args: %w", err)
+	}
+
+	var retention time.Duration
+	if args.Retention != "" {
+		var err error
+		retention, err = parseRetentionDuration(args.Retention)
+		if err != nil {
+			return err
 		}
+	} else {
+		retention = 5 * 24 * time.Hour
 	}
 
-	return river.RecordOutput(ctx, map[string]any{
-		"progress": map[string]any{
-			"total":   total,
-			"done":    done,
-			"percent": percent,
-		},
-		"data": map[string]any{
-			"results":     results,
-			"bytesDone":   done,
-			"bytesTotal":  total,
-			"updatedAt":   time.Now().UTC(),
-			"isCompleted": done >= total,
-		},
-	})
-}
+	before := time.Now().UTC().Add(-retention)
 
-func (e *jobExecutor) CleanOldEvents(ctx context.Context) error {
-	before := time.Now().UTC().Add(-5 * 24 * time.Hour)
+	if args.UserID > 0 {
+		_, err := e.api.repo.Events.DeleteOlderThanForUser(ctx, args.UserID, before)
+		return err
+	}
 	_, err := e.api.repo.Events.DeleteOlderThan(ctx, before)
 	return err
 }
 
-func (e *jobExecutor) CleanOldEventsForUser(ctx context.Context, args queue.CleanOldEventsArgs) error {
-	retention, err := parseRetentionDuration(args.Retention)
-	if err != nil {
-		return err
+func (e *jobExecutor) handleCleanStaleUploads(ctx context.Context, job *worker.Job) error {
+	var args struct {
+		UserID    int64  `json:"userId"`
+		Retention string `json:"retention"`
 	}
-	before := time.Now().UTC().Add(-retention)
-	_, err = e.api.repo.Events.DeleteOlderThanForUser(ctx, args.UserID, before)
-	return err
-}
+	if err := json.Unmarshal(job.Args, &args); err != nil {
+		return fmt.Errorf("invalid args: %w", err)
+	}
 
-type staleUploadGroupKey struct {
-	ChannelID int64
-	UserID    int64
-	Session   string
-}
-
-type staleUploadGroup struct {
-	partIDs []int
-	userID  int64
-}
-
-func (e *jobExecutor) CleanStaleUploadsForUser(ctx context.Context, args queue.CleanStaleUploadsArgs) error {
 	retention, err := parseRetentionDuration(args.Retention)
 	if err != nil {
 		return err
@@ -138,6 +113,60 @@ func (e *jobExecutor) CleanStaleUploadsForUser(ctx context.Context, args queue.C
 	return nil
 }
 
+func (e *jobExecutor) handleCleanPendingFiles(ctx context.Context, job *worker.Job) error {
+	var args struct {
+		UserID int64 `json:"userId"`
+	}
+	if err := json.Unmarshal(job.Args, &args); err != nil {
+		return fmt.Errorf("invalid args: %w", err)
+	}
+
+	rows, err := e.api.repo.Files.ListPendingForDeletion(ctx)
+	if err != nil {
+		return err
+	}
+	if len(rows) == 0 {
+		return nil
+	}
+
+	filtered := make([]repositories.PendingFile, 0, len(rows))
+	for _, row := range rows {
+		if row.UserID == args.UserID {
+			filtered = append(filtered, row)
+		}
+	}
+	if len(filtered) == 0 {
+		return nil
+	}
+
+	sessionByUser, err := latestSessionsByUsers(ctx, e.api, []int64{args.UserID})
+	if err != nil {
+		return err
+	}
+
+	groups := groupPendingFiles(filtered, sessionByUser)
+	for key, group := range groups {
+		if err := deleteChannelMessages(ctx, &e.api.cnf.TG, key.Session, key.ChannelID, group.partIDs); err != nil {
+			return err
+		}
+	}
+	if err := e.api.repo.Files.DeletePendingForDeletionByUser(ctx, args.UserID); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (e *jobExecutor) handleRefreshFolderSizes(ctx context.Context, job *worker.Job) error {
+	var args struct {
+		UserID int64 `json:"userId"`
+	}
+	if err := json.Unmarshal(job.Args, &args); err != nil {
+		return fmt.Errorf("invalid args: %w", err)
+	}
+	return e.api.repo.Files.RefreshFolderSizesByUser(ctx, args.UserID)
+}
+
 func parseRetentionDuration(raw string) (time.Duration, error) {
 	retention, err := internalduration.ParseDuration(strings.TrimSpace(raw))
 	if err != nil {
@@ -147,6 +176,17 @@ func parseRetentionDuration(raw string) (time.Duration, error) {
 		return 0, fmt.Errorf("retention duration must be greater than zero")
 	}
 	return retention, nil
+}
+
+type staleUploadGroupKey struct {
+	ChannelID int64
+	UserID    int64
+	Session   string
+}
+
+type staleUploadGroup struct {
+	partIDs []int
+	userID  int64
 }
 
 func groupStaleUploads(rows []repositories.StaleUpload, sessionByUser map[int64]string) map[staleUploadGroupKey]*staleUploadGroup {
@@ -185,47 +225,6 @@ type pendingFileGroup struct {
 	partIDs []int
 }
 
-func (e *jobExecutor) CleanPendingFilesForUser(ctx context.Context, userID int64) error {
-	rows, err := e.api.repo.Files.ListPendingForDeletion(ctx)
-	if err != nil {
-		return err
-	}
-	if len(rows) == 0 {
-		return nil
-	}
-
-	filtered := make([]repositories.PendingFile, 0, len(rows))
-	for _, row := range rows {
-		if row.UserID == userID {
-			filtered = append(filtered, row)
-		}
-	}
-	if len(filtered) == 0 {
-		return nil
-	}
-
-	sessionByUser, err := latestSessionsByUsers(ctx, e.api, []int64{userID})
-	if err != nil {
-		return err
-	}
-
-	groups := groupPendingFiles(filtered, sessionByUser)
-	for key, group := range groups {
-		if err := deleteChannelMessages(ctx, &e.api.cnf.TG, key.Session, key.ChannelID, group.partIDs); err != nil {
-			return err
-		}
-	}
-	if err := e.api.repo.Files.DeletePendingForDeletionByUser(ctx, userID); err != nil {
-		return err
-	}
-
-	return nil
-}
-
-func (e *jobExecutor) RefreshFolderSizesForUser(ctx context.Context, userID int64) error {
-	return e.api.repo.Files.RefreshFolderSizesByUser(ctx, userID)
-}
-
 func groupPendingFiles(rows []repositories.PendingFile, sessionByUser map[int64]string) map[pendingFileGroupKey]*pendingFileGroup {
 	groups := make(map[pendingFileGroupKey]*pendingFileGroup)
 	for _, row := range rows {
@@ -257,25 +256,6 @@ func groupPendingFiles(rows []repositories.PendingFile, sessionByUser map[int64]
 	return groups
 }
 
-func (e *jobExecutor) workingContext(ctx context.Context, userID int64) (context.Context, error) {
-	session, err := latestTGSession(ctx, e.api, userID)
-	if err != nil {
-		return nil, err
-	}
-	return auth.WithUser(ctx, userID, session), nil
-}
-
-func latestTGSession(ctx context.Context, apiSvc *apiService, userID int64) (string, error) {
-	sessions, err := apiSvc.repo.Sessions.GetByUserID(ctx, userID)
-	if err != nil {
-		return "", err
-	}
-	if len(sessions) == 0 {
-		return "", fmt.Errorf("no active telegram session found for user %d", userID)
-	}
-	return sessions[0].TgSession, nil
-}
-
 func latestSessionsByUsers(ctx context.Context, apiSvc *apiService, userIDs []int64) (map[int64]string, error) {
 	out := make(map[int64]string, len(userIDs))
 	for _, userID := range userIDs {
@@ -302,3 +282,6 @@ func deleteChannelMessages(ctx context.Context, tgConfig *config.TGConfig, sessi
 	}
 	return tgc.DeleteMessages(ctx, client, channelID, ids)
 }
+
+// Keep compile check that auth package is used
+var _ = auth.User

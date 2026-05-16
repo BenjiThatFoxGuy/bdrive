@@ -26,9 +26,6 @@ require (
 	github.com/pelletier/go-toml v1.9.5
 	github.com/pkg/sftp v1.13.7
 	github.com/redis/go-redis/v9 v9.17.2
-	github.com/riverqueue/river v0.32.0
-	github.com/riverqueue/river/riverdriver/riverpgxv5 v0.32.0
-	github.com/riverqueue/river/rivertype v0.32.0
 	github.com/robfig/cron/v3 v3.0.1
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/pflag v1.0.10
@@ -70,17 +67,10 @@ require (
 	github.com/mitchellh/copystructure v1.2.0 // indirect
 	github.com/mitchellh/reflectwalk v1.0.2 // indirect
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
-	github.com/riverqueue/river/riverdriver v0.32.0 // indirect
-	github.com/riverqueue/river/rivershared v0.32.0 // indirect
 	github.com/sethvargo/go-retry v0.3.0 // indirect
 	github.com/shopspring/decimal v1.4.0 // indirect
-	github.com/tidwall/gjson v1.18.0 // indirect
-	github.com/tidwall/match v1.2.0 // indirect
-	github.com/tidwall/pretty v1.2.1 // indirect
-	github.com/tidwall/sjson v1.2.5 // indirect
 	github.com/vmihailenco/tagparser/v2 v2.0.0 // indirect
 	go.opentelemetry.io/otel/metric v1.40.0 // indirect
-	go.uber.org/goleak v1.3.0 // indirect
 	go.yaml.in/yaml/v3 v3.0.4 // indirect
 	golang.org/x/exp v0.0.0-20251219203646-944ab1f22d93 // indirect
 	golang.org/x/mod v0.34.0 // indirect
@@ -118,11 +108,3 @@ require (
 )
 
 tool github.com/ogen-go/ogen/cmd/ogen
-
-replace github.com/riverqueue/river => github.com/tgdrive/river v0.0.0-20260406114409-12b1dd751bf7
-
-replace github.com/riverqueue/river/riverdriver/riverpgxv5 => github.com/tgdrive/river/riverdriver/riverpgxv5 v0.0.0-20260406114409-12b1dd751bf7
-
-replace github.com/riverqueue/river/riverdriver => github.com/tgdrive/river/riverdriver v0.0.0-20260406114409-12b1dd751bf7
-
-replace github.com/riverqueue/river/rivershared => github.com/tgdrive/river/rivershared v0.0.0-20260406114409-12b1dd751bf7

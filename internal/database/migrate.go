@@ -9,8 +9,6 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/pressly/goose/v3"
-	"github.com/riverqueue/river/riverdriver/riverpgxv5"
-	"github.com/riverqueue/river/rivermigrate"
 )
 
 //go:embed migrations/*.sql
@@ -31,7 +29,7 @@ func NewTestDatabase(tb testing.TB, migration bool) *pgxpool.Pool {
 	}
 
 	if migration {
-		if err := MigrateDB(pool, true); err != nil {
+		if err := MigrateDB(pool); err != nil {
 			tb.Fatalf("migration failed %v", err)
 		}
 	}
@@ -39,8 +37,7 @@ func NewTestDatabase(tb testing.TB, migration bool) *pgxpool.Pool {
 	return pool
 
 }
-func MigrateDB(pool *pgxpool.Pool, migrateRiver bool) error {
-	ctx := context.Background()
+func MigrateDB(pool *pgxpool.Pool) error {
 	std := stdlib.OpenDBFromPool(pool)
 	defer std.Close()
 
@@ -52,16 +49,6 @@ func MigrateDB(pool *pgxpool.Pool, migrateRiver bool) error {
 	}
 	if err := goose.Up(std, "migrations"); err != nil {
 		return err
-	}
-
-	if migrateRiver {
-		migrator, err := rivermigrate.New(riverpgxv5.New(pool), &rivermigrate.Config{Schema: "teldrive"})
-		if err != nil {
-			return err
-		}
-		if _, err := migrator.Migrate(ctx, rivermigrate.DirectionUp, nil); err != nil {
-			return err
-		}
 	}
 
 	return nil

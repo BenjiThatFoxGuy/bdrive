@@ -19,7 +19,7 @@ type KeyValue struct {
 }
 
 func (KeyValue) TableName() string {
-	return "teldrive.kv"
+	return "kv"
 }
 
 type kvStorage struct {

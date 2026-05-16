@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/tgdrive/teldrive/internal/config"
 	"go.uber.org/zap"
@@ -39,6 +40,11 @@ func NewDatabase(ctx context.Context, cfg *config.DBConfig, logCfg *config.DBLog
 			poolCfg.MaxConns = int32(cfg.Pool.MaxOpenConnections)
 			poolCfg.MinConns = int32(cfg.Pool.MaxIdleConnections)
 			poolCfg.MaxConnLifetime = cfg.Pool.MaxLifetime
+			if cfg.Schema != "" {
+				poolCfg.ConnConfig.RuntimeParams = map[string]string{
+					"search_path": cfg.Schema + ",public",
+				}
+			}
 			pool, err := pgxpool.NewWithConfig(attemptCtx, poolCfg)
 			if err != nil {
 				resultCh <- result{db: nil, err: err}
@@ -66,6 +72,14 @@ func NewDatabase(ctx context.Context, cfg *config.DBConfig, logCfg *config.DBLog
 		if err == nil {
 			if i > 0 {
 				lg.Info("db.connection.success", zap.Int("attempts", i+1))
+			}
+			// Create schema before any migrations run
+			if cfg.Schema != "" {
+				if _, schemaErr := db.Exec(ctx, "CREATE SCHEMA IF NOT EXISTS "+pgx.Identifier{cfg.Schema}.Sanitize()); schemaErr != nil {
+					db.Close()
+					return nil, fmt.Errorf("create schema: %w", schemaErr)
+				}
+				lg.Info("db.schema_ensured", zap.String("schema", cfg.Schema))
 			}
 			break
 		}

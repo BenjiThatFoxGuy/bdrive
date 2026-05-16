@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"time"
 
 	"github.com/go-jet/jet/v2/postgres"
@@ -263,41 +262,6 @@ func encodePeriodicJobArgs(kind string, args PeriodicJobArgs) (string, error) {
 		return "{}", nil
 	}
 
-	switch kind {
-	case "sync.run":
-		if _, ok := args.(SyncRunPeriodicArgs); !ok {
-			if _, ok := args.(*SyncRunPeriodicArgs); !ok {
-				return "", fmt.Errorf("invalid args type for kind %s", kind)
-			}
-		}
-	case "clean.old_events":
-		if _, ok := args.(CleanOldEventsPeriodicArgs); !ok {
-			if _, ok := args.(*CleanOldEventsPeriodicArgs); !ok {
-				return "", fmt.Errorf("invalid args type for kind %s", kind)
-			}
-		}
-	case "clean.stale_uploads":
-		if _, ok := args.(CleanStaleUploadsPeriodicArgs); !ok {
-			if _, ok := args.(*CleanStaleUploadsPeriodicArgs); !ok {
-				return "", fmt.Errorf("invalid args type for kind %s", kind)
-			}
-		}
-	case "clean.pending_files":
-		if _, ok := args.(CleanPendingFilesPeriodicArgs); !ok {
-			if _, ok := args.(*CleanPendingFilesPeriodicArgs); !ok {
-				return "", fmt.Errorf("invalid args type for kind %s", kind)
-			}
-		}
-	case "refresh.folder_sizes":
-		if _, ok := args.(RefreshFolderSizesPeriodicArgs); !ok {
-			if _, ok := args.(*RefreshFolderSizesPeriodicArgs); !ok {
-				return "", fmt.Errorf("invalid args type for kind %s", kind)
-			}
-		}
-	default:
-		return "", fmt.Errorf("unsupported periodic job kind: %s", kind)
-	}
-
 	b, err := json.Marshal(args)
 	if err != nil {
 		return "", err
@@ -311,12 +275,6 @@ func decodePeriodicJobArgs(kind string, raw json.RawMessage) (PeriodicJobArgs, e
 	}
 
 	switch kind {
-	case "sync.run":
-		var out SyncRunPeriodicArgs
-		if err := json.Unmarshal(raw, &out); err != nil {
-			return nil, err
-		}
-		return out, nil
 	case "clean.old_events":
 		var out CleanOldEventsPeriodicArgs
 		if err := json.Unmarshal(raw, &out); err != nil {
@@ -342,6 +300,23 @@ func decodePeriodicJobArgs(kind string, raw json.RawMessage) (PeriodicJobArgs, e
 		}
 		return out, nil
 	default:
-		return nil, fmt.Errorf("unsupported periodic job kind: %s", kind)
+		// For unknown/legacy kinds (e.g. sync.run from before removal),
+		// store as raw JSON map so DB data remains accessible.
+		var out map[string]any
+		if err := json.Unmarshal(raw, &out); err != nil {
+			return nil, err
+		}
+		return &genericPeriodicArgs{data: out}, nil
 	}
+}
+
+// genericPeriodicArgs wraps arbitrary JSON for legacy periodic job kinds.
+type genericPeriodicArgs struct {
+	data map[string]any
+}
+
+func (g *genericPeriodicArgs) periodicJobArgs() {}
+
+func (g *genericPeriodicArgs) MarshalJSON() ([]byte, error) {
+	return json.Marshal(g.data)
 }

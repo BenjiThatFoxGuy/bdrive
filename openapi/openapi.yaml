@@ -6,7 +6,6 @@ tags:
   - name: Auth
   - name: PeriodicJobs
   - name: Files
-  - name: Jobs
   - name: Uploads
   - name: Users
   - name: Shares
@@ -1007,149 +1006,6 @@ paths:
         - AccessTokenCookieAuth: []
         - XApiKeyHeaderAuth: []
         - SessionHashAuth: []
-  /jobs:
-    get:
-      operationId: Jobs_list
-      summary: List jobs
-      parameters:
-        - $ref: '#/components/parameters/JobListQuery.state'
-        - $ref: '#/components/parameters/JobListQuery.limit'
-        - $ref: '#/components/parameters/JobListQuery.cursor'
-      responses:
-        '200':
-          description: The request has succeeded.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/JobList'
-        default:
-          description: An unexpected error response.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-      tags:
-        - Jobs
-      security:
-        - BearerAuth: []
-        - AccessTokenCookieAuth: []
-        - XApiKeyHeaderAuth: []
-        - SessionHashAuth: []
-    post:
-      operationId: Jobs_insert
-      summary: Insert a new background job
-      parameters: []
-      responses:
-        '202':
-          description: The request has been accepted for processing, but processing has not yet completed.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/JobStatus'
-        default:
-          description: An unexpected error response.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-      tags:
-        - Jobs
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/JobInsertRequest'
-      security:
-        - BearerAuth: []
-        - AccessTokenCookieAuth: []
-        - XApiKeyHeaderAuth: []
-        - SessionHashAuth: []
-  /jobs/{id}:
-    get:
-      operationId: Jobs_get
-      summary: Get job status
-      parameters:
-        - name: id
-          in: path
-          required: true
-          schema:
-            type: integer
-            format: int64
-      responses:
-        '200':
-          description: The request has succeeded.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/JobStatus'
-        default:
-          description: An unexpected error response.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-      tags:
-        - Jobs
-      security:
-        - BearerAuth: []
-        - AccessTokenCookieAuth: []
-        - XApiKeyHeaderAuth: []
-        - SessionHashAuth: []
-  /jobs/{id}/cancel:
-    post:
-      operationId: Jobs_cancel
-      summary: Cancel a running or queued job
-      parameters:
-        - name: id
-          in: path
-          required: true
-          schema:
-            type: integer
-            format: int64
-      responses:
-        '204':
-          description: There is no content to send for this request, but the headers may be useful.
-        default:
-          description: An unexpected error response.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-      tags:
-        - Jobs
-      security:
-        - BearerAuth: []
-        - AccessTokenCookieAuth: []
-        - XApiKeyHeaderAuth: []
-        - SessionHashAuth: []
-  /jobs/{id}/delete:
-    delete:
-      operationId: Jobs_delete
-      summary: Delete a completed, cancelled, or discarded job
-      parameters:
-        - name: id
-          in: path
-          required: true
-          schema:
-            type: integer
-            format: int64
-      responses:
-        '204':
-          description: There is no content to send for this request, but the headers may be useful.
-        default:
-          description: An unexpected error response.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-      tags:
-        - Jobs
-      security:
-        - BearerAuth: []
-        - AccessTokenCookieAuth: []
-        - XApiKeyHeaderAuth: []
-        - SessionHashAuth: []
   /periodic-jobs:
     get:
       operationId: PeriodicJobs_list
@@ -1172,63 +1028,6 @@ paths:
                 $ref: '#/components/schemas/Error'
       tags:
         - PeriodicJobs
-      security:
-        - BearerAuth: []
-        - AccessTokenCookieAuth: []
-        - XApiKeyHeaderAuth: []
-        - SessionHashAuth: []
-    post:
-      operationId: PeriodicJobs_create
-      summary: Create periodic sync job
-      parameters: []
-      responses:
-        '201':
-          description: The request has succeeded and a new resource has been created as a result.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/PeriodicJobDetail'
-        default:
-          description: An unexpected error response.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-      tags:
-        - PeriodicJobs
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/PeriodicJobCreate'
-      security:
-        - BearerAuth: []
-        - AccessTokenCookieAuth: []
-        - XApiKeyHeaderAuth: []
-        - SessionHashAuth: []
-  /periodic-jobs/test-connection:
-    post:
-      operationId: PeriodicJobs_testConnection
-      summary: Test sync source connection
-      parameters: []
-      responses:
-        '204':
-          description: There is no content to send for this request, but the headers may be useful.
-        default:
-          description: An unexpected error response.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-      tags:
-        - PeriodicJobs
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/SyncArgs'
       security:
         - BearerAuth: []
         - AccessTokenCookieAuth: []
@@ -1392,7 +1191,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/JobStatus'
+                $ref: '#/components/schemas/PeriodicJobRunStatus'
         default:
           description: An unexpected error response.
           content:
@@ -2334,33 +2133,6 @@ components:
       schema:
         type: string
       explode: false
-    JobListQuery.cursor:
-      name: cursor
-      in: query
-      required: false
-      description: Pagination cursor
-      schema:
-        type: string
-      explode: false
-    JobListQuery.limit:
-      name: limit
-      in: query
-      required: false
-      description: Maximum number of jobs to return
-      schema:
-        type: integer
-        minimum: 1
-        maximum: 200
-        default: 50
-      explode: false
-    JobListQuery.state:
-      name: state
-      in: query
-      required: false
-      description: Filter by job state
-      schema:
-        $ref: '#/components/schemas/JobState'
-      explode: false
     ShareQuery.cursor:
       name: cursor
       in: query
@@ -2953,199 +2725,6 @@ components:
           format: date-time
           description: Last update time
       description: File update request
-    JobError:
-      type: object
-      required:
-        - message
-      properties:
-        message:
-          type: string
-          description: Error message
-        detail:
-          type: string
-          description: Error context or stack trace
-      description: Job error details
-    JobInsertRequest:
-      type: object
-      required:
-        - kind
-        - args
-      properties:
-        kind:
-          type: string
-          description: Job kind
-        args:
-          description: Job arguments
-        queue:
-          type: string
-          description: Queue name
-        scheduledAt:
-          type: string
-          format: date-time
-          description: Schedule time for delayed execution
-        maxAttempts:
-          type: integer
-          description: Maximum attempts before discard
-      description: Job insertion request
-    JobList:
-      type: object
-      required:
-        - items
-        - meta
-        - counts
-      properties:
-        items:
-          type: array
-          items:
-            $ref: '#/components/schemas/JobStatus'
-          minItems: 0
-          maxItems: 200
-          description: Array of jobs
-        meta:
-          allOf:
-            - $ref: '#/components/schemas/Meta'
-          description: Pagination metadata
-        counts:
-          allOf:
-            - $ref: '#/components/schemas/JobStateCounts'
-          description: Job counts grouped by state
-      description: Paginated job listing response
-    JobOutput:
-      type: object
-      properties:
-        progress:
-          allOf:
-            - $ref: '#/components/schemas/JobProgress'
-          description: Progress details
-        data:
-          description: Additional output payload
-      description: Job output payload
-    JobProgress:
-      type: object
-      properties:
-        total:
-          type: integer
-          description: Total work items
-        done:
-          type: integer
-          description: Completed work items
-        percent:
-          type: integer
-          description: Progress percentage
-      description: Job progress summary
-    JobState:
-      type: string
-      enum:
-        - available
-        - running
-        - scheduled
-        - retryable
-        - completed
-        - cancelled
-        - discarded
-      description: River job state
-    JobStateCounts:
-      type: object
-      required:
-        - all
-        - available
-        - running
-        - scheduled
-        - retryable
-        - completed
-        - cancelled
-        - discarded
-      properties:
-        all:
-          type: integer
-          format: int64
-          description: Total number of jobs
-        available:
-          type: integer
-          format: int64
-          description: Available jobs
-        running:
-          type: integer
-          format: int64
-          description: Running jobs
-        scheduled:
-          type: integer
-          format: int64
-          description: Scheduled jobs
-        retryable:
-          type: integer
-          format: int64
-          description: Retryable jobs
-        completed:
-          type: integer
-          format: int64
-          description: Completed jobs
-        cancelled:
-          type: integer
-          format: int64
-          description: Cancelled jobs
-        discarded:
-          type: integer
-          format: int64
-          description: Discarded jobs
-      description: Job counts grouped by state
-    JobStatus:
-      type: object
-      required:
-        - id
-        - kind
-        - queue
-        - state
-        - attempt
-        - maxAttempts
-        - createdAt
-      properties:
-        id:
-          type: integer
-          format: int64
-          description: Job ID
-        kind:
-          type: string
-          description: Job kind
-        queue:
-          type: string
-          description: Queue name
-        state:
-          allOf:
-            - $ref: '#/components/schemas/JobState'
-          description: Current job state
-        attempt:
-          type: integer
-          description: Number of attempts so far
-        maxAttempts:
-          type: integer
-          description: Maximum allowed attempts
-        createdAt:
-          type: string
-          format: date-time
-          description: Job creation time
-        scheduledAt:
-          type: string
-          format: date-time
-          description: Scheduled execution time
-        startedAt:
-          type: string
-          format: date-time
-          description: Start time of the current attempt
-        finalizedAt:
-          type: string
-          format: date-time
-          description: Completion time
-        output:
-          allOf:
-            - $ref: '#/components/schemas/JobOutput'
-          description: Job output payload
-        errors:
-          type: array
-          items:
-            $ref: '#/components/schemas/JobError'
-          description: Error history
-      description: Job status response
     Meta:
       type: object
       properties:
@@ -3167,22 +2746,6 @@ components:
           description: Encryption salt
           example: abc123
       description: File part information
-    PeriodicJobCreate:
-      type: object
-      required:
-        - name
-        - cronExpression
-        - args
-      properties:
-        name:
-          type: string
-        enabled:
-          type: boolean
-          default: true
-        cronExpression:
-          type: string
-        args:
-          $ref: '#/components/schemas/SyncArgs'
     PeriodicJobDetail:
       type: object
       required:
@@ -3204,6 +2767,16 @@ components:
           type: boolean
         cronExpression:
           type: string
+        nextRunAt:
+          type: string
+          format: date-time
+        lastRunAt:
+          type: string
+          format: date-time
+        lastState:
+          $ref: '#/components/schemas/PeriodicJobRunState'
+        lastError:
+          type: string
         createdAt:
           type: string
           format: date-time
@@ -3216,11 +2789,34 @@ components:
     PeriodicJobKind:
       type: string
       enum:
-        - sync.run
         - clean.old_events
         - clean.stale_uploads
         - clean.pending_files
         - refresh.folder_sizes
+    PeriodicJobRunState:
+      type: string
+      enum:
+        - scheduled
+        - running
+        - succeeded
+        - failed
+    PeriodicJobRunStatus:
+      type: object
+      required:
+        - id
+        - kind
+        - state
+        - createdAt
+      properties:
+        id:
+          $ref: '#/components/schemas/UUID'
+        kind:
+          $ref: '#/components/schemas/PeriodicJobKind'
+        state:
+          $ref: '#/components/schemas/PeriodicJobRunState'
+        createdAt:
+          type: string
+          format: date-time
     PeriodicJobSummary:
       type: object
       required:
@@ -3241,6 +2837,16 @@ components:
         enabled:
           type: boolean
         cronExpression:
+          type: string
+        nextRunAt:
+          type: string
+          format: date-time
+        lastRunAt:
+          type: string
+          format: date-time
+        lastState:
+          $ref: '#/components/schemas/PeriodicJobRunState'
+        lastError:
           type: string
         createdAt:
           type: string
@@ -3348,57 +2954,6 @@ components:
           type: string
           description: Full path of the file/folder (e.g., 'documents/projects/file.txt')
           example: documents/2023/report.pdf
-    SyncArgs:
-      type: object
-      required:
-        - source
-        - destinationDir
-      properties:
-        source:
-          type: string
-        destinationDir:
-          type: string
-        headers:
-          type: object
-          additionalProperties:
-            type: string
-        proxy:
-          type: string
-        filters:
-          $ref: '#/components/schemas/SyncFilters'
-        options:
-          $ref: '#/components/schemas/SyncOptions'
-    SyncFilters:
-      type: object
-      properties:
-        include:
-          type: array
-          items:
-            type: string
-        exclude:
-          type: array
-          items:
-            type: string
-        minSize:
-          type: integer
-          format: int64
-        maxSize:
-          type: integer
-          format: int64
-        excludeIfPresent:
-          type: array
-          items:
-            type: string
-    SyncOptions:
-      type: object
-      properties:
-        partSize:
-          type: integer
-          format: int64
-        encrypted:
-          type: boolean
-        sync:
-          type: boolean
     UUID:
       type: string
       format: uuid

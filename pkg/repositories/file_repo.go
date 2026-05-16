@@ -437,13 +437,13 @@ func (r *JetFileRepository) RefreshFolderSizesByUser(ctx context.Context, userID
 	query := `
 WITH RECURSIVE folder_hierarchy AS (
 	SELECT f.id, f.parent_id, ARRAY[f.id]::uuid[] AS path
-	FROM teldrive.files f
+	FROM files f
 	WHERE f.user_id = $1 AND f.type = 'folder' AND f.status = 'active' AND f.parent_id IS NULL
 
 	UNION ALL
 
 	SELECT f.id, f.parent_id, fh.path || f.id
-	FROM teldrive.files f
+	FROM files f
 	JOIN folder_hierarchy fh ON f.parent_id = fh.id
 	WHERE f.user_id = $1 AND f.type = 'folder' AND f.status = 'active'
 ), folder_sizes AS (
@@ -451,7 +451,7 @@ WITH RECURSIVE folder_hierarchy AS (
 	       fh.path,
 	       COALESCE(SUM(CASE WHEN c.type <> 'folder' AND c.status = 'active' THEN COALESCE(c.size, 0) ELSE 0 END), 0) AS direct_size
 	FROM folder_hierarchy fh
-	LEFT JOIN teldrive.files c
+	LEFT JOIN files c
 	  ON c.parent_id = fh.id AND c.user_id = $1
 	GROUP BY fh.id, fh.path
 ), cumulative_sizes AS (
@@ -461,7 +461,7 @@ WITH RECURSIVE folder_hierarchy AS (
 	JOIN folder_sizes fs2 ON fs2.path @> fs.path
 	GROUP BY fs.id
 )
-UPDATE teldrive.files f
+UPDATE files f
 SET size = cs.total_size,
 	updated_at = NOW() AT TIME ZONE 'UTC'
 FROM cumulative_sizes cs

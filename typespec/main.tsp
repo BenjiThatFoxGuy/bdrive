@@ -609,159 +609,18 @@ model JobOutput {
   data?: unknown;
 }
 
-@doc("Job insertion request")
-model JobInsertRequest {
-  @doc("Job kind")
-  kind: string;
-
-  @doc("Job arguments")
-  args: unknown;
-
-  @doc("Queue name")
-  queue?: string;
-
-  @doc("Schedule time for delayed execution")
-  scheduledAt?: utcDateTime;
-
-  @doc("Maximum attempts before discard")
-  maxAttempts?: integer;
-}
-
-@doc("Job status response")
-model JobStatus {
-  @doc("Job ID")
-  id: int64;
-
-  @doc("Job kind")
-  kind: string;
-
-  @doc("Queue name")
-  queue: string;
-
-  @doc("Current job state")
-  state: JobState;
-
-  @doc("Number of attempts so far")
-  attempt: integer;
-
-  @doc("Maximum allowed attempts")
-  maxAttempts: integer;
-
-  @doc("Job creation time")
-  createdAt: utcDateTime;
-
-  @doc("Scheduled execution time")
-  scheduledAt?: utcDateTime;
-
-  @doc("Start time of the current attempt")
-  startedAt?: utcDateTime;
-
-  @doc("Completion time")
-  finalizedAt?: utcDateTime;
-
-  @doc("Job output payload")
-  output?: JobOutput;
-
-  @doc("Error history")
-  errors?: JobError[];
-}
-
-@doc("Query parameters for listing jobs")
-model JobListQuery {
-  @query
-  @doc("Filter by job state")
-  state?: JobState;
-
-  @query
-  @doc("Maximum number of jobs to return")
-  @minValue(1)
-  @maxValue(200)
-  limit?: integer = 50;
-
-  @query
-  @doc("Pagination cursor")
-  cursor?: string;
-}
-
-@doc("Job counts grouped by state")
-model JobStateCounts {
-  @doc("Total number of jobs")
-  all: int64;
-
-  @doc("Available jobs")
-  available: int64;
-
-  @doc("Running jobs")
-  running: int64;
-
-  @doc("Scheduled jobs")
-  scheduled: int64;
-
-  @doc("Retryable jobs")
-  retryable: int64;
-
-  @doc("Completed jobs")
-  completed: int64;
-
-  @doc("Cancelled jobs")
-  cancelled: int64;
-
-  @doc("Discarded jobs")
-  discarded: int64;
-}
-
-@doc("Paginated job listing response")
-model JobList {
-  @doc("Array of jobs")
-  @minItems(0)
-  @maxItems(200)
-  items: JobStatus[];
-
-  @doc("Pagination metadata")
-  meta: Meta;
-
-  @doc("Job counts grouped by state")
-  counts: JobStateCounts;
-}
-
-model SyncFilters {
-  include?: string[];
-  exclude?: string[];
-  minSize?: int64;
-  maxSize?: int64;
-  excludeIfPresent?: string[];
-}
-
-model SyncOptions {
-  partSize?: int64;
-  encrypted?: boolean;
-  sync?: boolean;
-}
-
-model SyncArgs {
-  source: string;
-  destinationDir: string;
-  headers?: Record<string>;
-  proxy?: string;
-  filters?: SyncFilters;
-  options?: SyncOptions;
-}
-
-model SyncArgsUpdate {
-  source?: string;
-  destinationDir?: string;
-  headers?: Record<string>;
-  proxy?: string;
-  filters?: SyncFilters;
-  options?: SyncOptions;
-}
-
 enum PeriodicJobKind {
-  SyncRun: "sync.run",
   CleanOldEvents: "clean.old_events",
   CleanStaleUploads: "clean.stale_uploads",
   CleanPendingFiles: "clean.pending_files",
   RefreshFolderSizes: "refresh.folder_sizes",
+}
+
+enum PeriodicJobRunState {
+  Scheduled: "scheduled",
+  Running: "running",
+  Succeeded: "succeeded",
+  Failed: "failed",
 }
 
 model CleanOldEventsArgs {
@@ -780,6 +639,10 @@ model PeriodicJobSummary {
   kind: PeriodicJobKind;
   enabled: boolean;
   cronExpression: string;
+  nextRunAt?: utcDateTime;
+  lastRunAt?: utcDateTime;
+  lastState?: PeriodicJobRunState;
+  lastError?: string;
   createdAt: utcDateTime;
   updatedAt: utcDateTime;
 }
@@ -790,16 +653,13 @@ model PeriodicJobDetail {
   kind: PeriodicJobKind;
   enabled: boolean;
   cronExpression: string;
+  nextRunAt?: utcDateTime;
+  lastRunAt?: utcDateTime;
+  lastState?: PeriodicJobRunState;
+  lastError?: string;
   createdAt: utcDateTime;
   updatedAt: utcDateTime;
   args?: Record<unknown>;
-}
-
-model PeriodicJobCreate {
-  name: string;
-  enabled?: boolean = true;
-  cronExpression: string;
-  args: SyncArgs;
 }
 
 model PeriodicJobUpdate {
@@ -807,6 +667,13 @@ model PeriodicJobUpdate {
   enabled?: boolean;
   cronExpression?: string;
   args?: Record<unknown>;
+}
+
+model PeriodicJobRunStatus {
+  id: UUID;
+  kind: PeriodicJobKind;
+  state: PeriodicJobRunState;
+  createdAt: utcDateTime;
 }
 
 @route("/periodic-jobs")
@@ -817,13 +684,6 @@ interface PeriodicJobs {
   @get
   @summary("List periodic jobs")
   list(): PeriodicJobSummary[] | Error;
-
-  @route("")
-  @post
-  @summary("Create periodic sync job")
-  create(@body body: PeriodicJobCreate): (PeriodicJobDetail & {
-    @statusCode _: 201;
-  }) | Error;
 
   @route("/{id}")
   @get
@@ -854,14 +714,9 @@ interface PeriodicJobs {
   @post
   @summary("Run periodic job now")
   run(@path id: UUID): {
-    ...JobStatus;
+    ...PeriodicJobRunStatus;
     @statusCode _: 202;
   } | Error;
-
-  @route("/test-connection")
-  @post
-  @summary("Test sync source connection")
-  testConnection(@body body: SyncArgs): NoContentResponse | Error;
 }
 
 @doc("Bulk file delete request")
@@ -1010,39 +865,6 @@ interface Files {
   @get
   @summary("Get category stats")
   categoryStats(): CategoryStats[] | Error;
-}
-
-@route("/jobs")
-@tag("Jobs")
-@useAuth(ApiAuth)
-interface Jobs {
-  @route("")
-  @get
-  @summary("List jobs")
-  list(...JobListQuery): JobList | Error;
-
-  @route("")
-  @post
-  @summary("Insert a new background job")
-  insert(@body body: JobInsertRequest): {
-    ...JobStatus;
-    @statusCode _: 202;
-  } | Error;
-
-  @route("/{id}")
-  @get
-  @summary("Get job status")
-  get(@path id: int64): JobStatus | Error;
-
-  @route("/{id}/cancel")
-  @post
-  @summary("Cancel a running or queued job")
-  cancel(@path id: int64): NoContentResponse | Error;
-
-  @route("/{id}/delete")
-  @delete
-  @summary("Delete a completed, cancelled, or discarded job")
-  delete(@path id: int64): NoContentResponse | Error;
 }
 
 @doc("Query parameters for file upload")

@@ -5,7 +5,6 @@ vars:
   APP_NAME: teldrive
   BUILD_DIR: bin
   FRONTEND_DIR: ui/dist
-  FRONTEND_ASSET: https://github.com/tgdrive/teldrive-ui/releases/download/latest/teldrive-ui.zip
   GIT_COMMIT:
     sh: git rev-parse --short HEAD
   MODULE_PATH:
@@ -30,9 +29,12 @@ tasks:
       - go mod tidy
 
   ui:
-    desc: Download UI assets
+    desc: Build UI assets
+    dir: ui
     cmds:
-      - go run scripts/extract.go -url {{.FRONTEND_ASSET}} -output {{.FRONTEND_DIR}}
+      - bun install
+      - bun run gen:api-client
+      - bun run build
 
   gen-api:
     dir: typespec

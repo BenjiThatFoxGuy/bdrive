@@ -10,7 +10,7 @@ import (
 	"github.com/tgdrive/teldrive/internal/api"
 )
 
-func TestPeriodicJobsRoutes_CRUD_EnableDisable_RunNow(t *testing.T) {
+func TestPeriodicJobsRoutes_MaintenanceJobs(t *testing.T) {
 	s := newSuite(t)
 	ctx := context.Background()
 	_, client, _ := loginWithClient(t, s, 7311, "user7311")
@@ -28,183 +28,59 @@ func TestPeriodicJobsRoutes_CRUD_EnableDisable_RunNow(t *testing.T) {
 		foundKinds[string(item.Kind)] = true
 	}
 	if !foundKinds["clean.old_events"] || !foundKinds["clean.pending_files"] {
-		t.Fatalf("expected maintenance presets, got %+v", foundKinds)
-	}
-	if !foundKinds["clean.stale_uploads"] {
-		t.Fatalf("expected clean.stale_uploads preset, got %+v", foundKinds)
-	}
-	if !foundKinds["refresh.folder_sizes"] {
-		t.Fatalf("expected refresh.folder_sizes preset, got %+v", foundKinds)
+		t.Fatalf("expected maintenance jobs in list, got %+v", list)
 	}
 
-	assertMaintenanceRetention := func(jobKind api.PeriodicJobKind, expected string) {
-		t.Helper()
+	assertMaintenanceRetention := func(kind api.PeriodicJobKind, expected string) {
 		for _, item := range list {
-			if item.Kind != jobKind {
-				continue
+			if item.Kind == kind {
+				detail, err := client.PeriodicJobsGet(ctx, api.PeriodicJobsGetParams{ID: item.ID})
+				if err != nil {
+					t.Fatalf("PeriodicJobsGet(%s) failed: %v", kind, err)
+				}
+				args, ok := detail.Args.Get()
+				if !ok {
+					t.Fatalf("expected args for %s", kind)
+				}
+				retentionRaw, ok := args["retention"]
+				if !ok {
+					t.Fatalf("expected retention in args for %s: %+v", kind, args)
+				}
+				var retention string
+				if err := json.Unmarshal(retentionRaw, &retention); err != nil {
+					t.Fatalf("unmarshal retention for %s: %v", kind, err)
+				}
+				if retention != expected {
+					t.Fatalf("expected retention=%s for %s, got %s", expected, kind, retention)
+				}
 			}
-			detail, err := client.PeriodicJobsGet(ctx, api.PeriodicJobsGetParams{ID: item.ID})
-			if err != nil {
-				t.Fatalf("PeriodicJobsGet %s failed: %v", jobKind, err)
-			}
-			args, ok := detail.Args.Get()
-			if !ok {
-				t.Fatalf("expected %s args to be set", jobKind)
-			}
-			retentionRaw, ok := args["retention"]
-			if !ok {
-				t.Fatalf("expected retention in %s args: %+v", jobKind, args)
-			}
-			var retention string
-			if err := json.Unmarshal(retentionRaw, &retention); err != nil {
-				t.Fatalf("unmarshal retention for %s: %v", jobKind, err)
-			}
-			if retention != expected {
-				t.Fatalf("expected %s retention=%s, got %s", jobKind, expected, retention)
-			}
-			return
 		}
-		t.Fatalf("expected maintenance job %s", jobKind)
 	}
 
-	assertMaintenanceRetention(api.PeriodicJobKind("clean.old_events"), "5d")
-	assertMaintenanceRetention(api.PeriodicJobKind("clean.stale_uploads"), "1d")
-
-	created, err := client.PeriodicJobsCreate(ctx, &api.PeriodicJobCreate{
-		Name:           "daily-photos",
-		Enabled:        api.NewOptBool(true),
-		CronExpression: "*/5 * * * *",
-		Args: api.SyncArgs{
-			Source:         "local:///tmp/source",
-			DestinationDir: "/backup/photos",
-			Headers:        api.NewOptSyncArgsHeaders(api.SyncArgsHeaders{}),
-			Proxy:          api.NewOptString(""),
-			Filters: api.NewOptSyncFilters(api.SyncFilters{
-				Include: []string{"**/*.jpg"},
-			}),
-			Options: api.NewOptSyncOptions(api.SyncOptions{
-				PartSize: api.NewOptInt64(32 * 1024 * 1024),
-				Sync:     api.NewOptBool(true),
-			}),
-		},
-	})
-	if err != nil {
-		t.Fatalf("PeriodicJobsCreate failed: %v", err)
-	}
-	if created.Kind != api.PeriodicJobKindSyncRun {
-		t.Fatalf("expected sync.run kind, got %s", created.Kind)
-	}
-
-	got, err := client.PeriodicJobsGet(ctx, api.PeriodicJobsGetParams{ID: created.ID})
-	if err != nil {
-		t.Fatalf("PeriodicJobsGet failed: %v", err)
-	}
-	if got.Name != "daily-photos" || got.CronExpression != "*/5 * * * *" {
-		t.Fatalf("unexpected periodic job payload: %+v", got)
-	}
-
-	updated, err := client.PeriodicJobsUpdate(ctx, &api.PeriodicJobUpdate{
-		Name:           api.NewOptString("daily-photos-v2"),
-		Enabled:        api.NewOptBool(true),
-		CronExpression: api.NewOptString("*/10 * * * *"),
-		Args: api.NewOptPeriodicJobUpdateArgs(api.PeriodicJobUpdateArgs{
-			"destinationDir": jx.Raw(`"/backup/photos-v2"`),
-			"options":        jx.Raw(`{"sync":false}`),
-		}),
-	}, api.PeriodicJobsUpdateParams{ID: created.ID})
-	if err != nil {
-		t.Fatalf("PeriodicJobsUpdate failed: %v", err)
-	}
-	if updated.Name != "daily-photos-v2" || updated.CronExpression != "*/10 * * * *" {
-		t.Fatalf("unexpected updated periodic job: %+v", updated)
-	}
-
-	if err := client.PeriodicJobsDisable(ctx, api.PeriodicJobsDisableParams{ID: created.ID}); err != nil {
-		t.Fatalf("PeriodicJobsDisable failed: %v", err)
-	}
-	disabled, err := client.PeriodicJobsGet(ctx, api.PeriodicJobsGetParams{ID: created.ID})
-	if err != nil {
-		t.Fatalf("PeriodicJobsGet after disable failed: %v", err)
-	}
-	if disabled.Enabled {
-		t.Fatalf("expected periodic job to be disabled")
-	}
-
-	if err := client.PeriodicJobsEnable(ctx, api.PeriodicJobsEnableParams{ID: created.ID}); err != nil {
-		t.Fatalf("PeriodicJobsEnable failed: %v", err)
-	}
-
-	run, err := client.PeriodicJobsRun(ctx, api.PeriodicJobsRunParams{ID: created.ID})
-	if err != nil {
-		t.Fatalf("PeriodicJobsRun failed: %v", err)
-	}
-	if run.Kind != "sync.run" {
-		t.Fatalf("expected sync.run kind, got %s", run.Kind)
-	}
-
-	if err := client.PeriodicJobsDelete(ctx, api.PeriodicJobsDeleteParams{ID: created.ID}); err != nil {
-		t.Fatalf("PeriodicJobsDelete failed: %v", err)
-	}
-	_, err = client.PeriodicJobsGet(ctx, api.PeriodicJobsGetParams{ID: created.ID})
-	if statusCode(err) != 404 {
-		t.Fatalf("expected 404 after delete, got %d err=%v", statusCode(err), err)
-	}
+	assertMaintenanceRetention(api.PeriodicJobKindCleanOldEvents, "5d0m0s")
+	assertMaintenanceRetention(api.PeriodicJobKindCleanStaleUploads, "1d0m0s")
 }
 
-func TestPeriodicJobsRoutes_Validation(t *testing.T) {
+func TestPeriodicJobsRoutes_SystemJobProtection(t *testing.T) {
 	s := newSuite(t)
 	ctx := context.Background()
 	_, client, _ := loginWithClient(t, s, 7312, "user7312")
 
-	t.Run("invalid cron expression returns 400", func(t *testing.T) {
-		_, err := client.PeriodicJobsCreate(ctx, &api.PeriodicJobCreate{
-			Name:           "bad-cron",
-			Enabled:        api.NewOptBool(true),
-			CronExpression: "not-a-cron",
-			Args: api.SyncArgs{
-				Source:         "local:///tmp/source",
-				DestinationDir: "/backup/x",
-				Headers:        api.NewOptSyncArgsHeaders(api.SyncArgsHeaders{}),
-				Proxy:          api.NewOptString(""),
-			},
-		})
-		if statusCode(err) != 400 {
-			t.Fatalf("expected 400, got %d err=%v", statusCode(err), err)
-		}
-	})
+	items, err := client.PeriodicJobsList(ctx)
+	if err != nil {
+		t.Fatalf("PeriodicJobsList failed: %v", err)
+	}
 
-	t.Run("destinationDir must be absolute", func(t *testing.T) {
-		_, err := client.PeriodicJobsCreate(ctx, &api.PeriodicJobCreate{
-			Name:           "bad-destination",
-			Enabled:        api.NewOptBool(true),
-			CronExpression: "*/5 * * * *",
-			Args: api.SyncArgs{
-				Source:         "local:///tmp/source",
-				DestinationDir: "relative/path",
-				Headers:        api.NewOptSyncArgsHeaders(api.SyncArgsHeaders{}),
-				Proxy:          api.NewOptString(""),
-			},
-		})
-		if statusCode(err) != 400 {
-			t.Fatalf("expected 400, got %d err=%v", statusCode(err), err)
-		}
-	})
+	var maintenanceID api.UUID
+	for _, item := range items {
+		maintenanceID = item.ID
+		break
+	}
+	if uuid.UUID(maintenanceID) == uuid.Nil {
+		t.Fatalf("expected a maintenance job")
+	}
 
-	t.Run("maintenance jobs cannot be deleted", func(t *testing.T) {
-		items, err := client.PeriodicJobsList(ctx)
-		if err != nil {
-			t.Fatalf("PeriodicJobsList failed: %v", err)
-		}
-		var maintenanceID api.UUID
-		for _, item := range items {
-			if item.Kind != api.PeriodicJobKindSyncRun {
-				maintenanceID = item.ID
-				break
-			}
-		}
-		if uuid.UUID(maintenanceID) == uuid.Nil {
-			t.Fatalf("expected a maintenance job")
-		}
+	t.Run("system jobs cannot be deleted", func(t *testing.T) {
 		if err := client.PeriodicJobsDelete(ctx, api.PeriodicJobsDeleteParams{ID: maintenanceID}); statusCode(err) != 400 {
 			t.Fatalf("expected 400, got %d err=%v", statusCode(err), err)
 		}

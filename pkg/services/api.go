@@ -7,8 +7,6 @@ import (
 
 	"github.com/go-faster/errors"
 	"github.com/ogen-go/ogen/ogenerrors"
-	"github.com/riverqueue/river"
-	"github.com/riverqueue/river/rivertype"
 	"go.uber.org/zap"
 
 	ht "github.com/ogen-go/ogen/http"
@@ -22,6 +20,7 @@ import (
 	"github.com/tgdrive/teldrive/internal/version"
 	"github.com/tgdrive/teldrive/pkg/mapper"
 	"github.com/tgdrive/teldrive/pkg/repositories"
+	"github.com/tgdrive/teldrive/pkg/worker"
 )
 
 type apiService struct {
@@ -32,14 +31,7 @@ type apiService struct {
 	channelManager ChannelManager
 	telegram       TelegramService
 	repo           *repositories.Repositories
-	jobs           jobClient
-	periodicJobs   periodicJobRegistry
-}
-
-type periodicJobRegistry interface {
-	AddMany(periodicJobs []*river.PeriodicJob) []rivertype.PeriodicJobHandle
-	AddSafely(periodicJob *river.PeriodicJob) (rivertype.PeriodicJobHandle, error)
-	RemoveByID(id string) bool
+	workerStore    *worker.Store
 }
 
 func (a *apiService) VersionVersion(ctx context.Context) (*api.ApiVersion, error) {
@@ -90,8 +82,7 @@ func NewApiService(repo *repositories.Repositories,
 	cache cache.Cacher,
 	telegram TelegramService,
 	events events.EventBroadcaster,
-	jobs jobClient,
-	periodicJobs periodicJobRegistry) *apiService {
+	workerStore *worker.Store) *apiService {
 
 	return &apiService{
 		repo:           repo,
@@ -101,23 +92,8 @@ func NewApiService(repo *repositories.Repositories,
 		authAttempts:   newAuthAttemptManager(),
 		channelManager: channelManager,
 		telegram:       telegram,
-		jobs:           jobs,
-		periodicJobs:   periodicJobs,
+		workerStore:    workerStore,
 	}
-}
-
-func (a *apiService) syncRunMaxAttempts() int {
-	if a == nil || a.cnf == nil || a.cnf.Jobs.SyncRun.MaxAttempts <= 0 {
-		return 8
-	}
-	return a.cnf.Jobs.SyncRun.MaxAttempts
-}
-
-func (a *apiService) syncTransferMaxAttempts() int {
-	if a == nil || a.cnf == nil || a.cnf.Jobs.SyncTransfer.MaxAttempts <= 0 {
-		return 2
-	}
-	return a.cnf.Jobs.SyncTransfer.MaxAttempts
 }
 
 type apiError struct {

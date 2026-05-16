@@ -238,31 +238,6 @@ type PeriodicJobArgs interface {
 	periodicJobArgs()
 }
 
-type SyncRunPeriodicArgs struct {
-	Source         string            `json:"source"`
-	DestinationDir string            `json:"destinationDir"`
-	Headers        map[string]string `json:"headers,omitempty"`
-	Proxy          *string           `json:"proxy,omitempty"`
-	Filters        *SyncFiltersArgs  `json:"filters,omitempty"`
-	Options        *SyncOptionsArgs  `json:"options,omitempty"`
-}
-
-func (SyncRunPeriodicArgs) periodicJobArgs() {}
-
-type SyncFiltersArgs struct {
-	Include          []string `json:"include,omitempty"`
-	Exclude          []string `json:"exclude,omitempty"`
-	ExcludeIfPresent []string `json:"excludeIfPresent,omitempty"`
-	MinSize          *int64   `json:"minSize,omitempty"`
-	MaxSize          *int64   `json:"maxSize,omitempty"`
-}
-
-type SyncOptionsArgs struct {
-	PartSize  *int64 `json:"partSize,omitempty"`
-	Encrypted *bool  `json:"encrypted,omitempty"`
-	Sync      *bool  `json:"sync,omitempty"`
-}
-
 type CleanOldEventsPeriodicArgs struct {
 	Retention string `json:"retention,omitempty"`
 }

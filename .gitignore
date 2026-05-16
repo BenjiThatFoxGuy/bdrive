@@ -31,6 +31,8 @@ sslcerts
 logs
 bin
 ui/dist
+ui/node_modules
+ui/tsconfig.tsbuildinfo
 docs/dist
 docs/.vitepress/dist
 docs/.vitepress/cache

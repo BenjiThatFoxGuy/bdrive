@@ -286,17 +286,17 @@ func (cp *channelProcessor) loadUploadPartMap(out map[int]bool) error {
 func (cp *channelProcessor) deleteFilesBulk(fileIDs []uuid.UUID, userID int64) error {
 	query := `
 WITH RECURSIVE target_folders AS (
-    SELECT id FROM teldrive.files WHERE id = ANY($1::uuid[]) AND user_id = $2 AND type = 'folder'
+    SELECT id FROM files WHERE id = ANY($1::uuid[]) AND user_id = $2 AND type = 'folder'
     UNION ALL
-    SELECT f.id FROM teldrive.files f JOIN target_folders tf ON f.parent_id = tf.id
+    SELECT f.id FROM files f JOIN target_folders tf ON f.parent_id = tf.id
 ), mark_deleted AS (
-    UPDATE teldrive.files
+    UPDATE files
     SET status = 'pending_deletion', updated_at = NOW() AT TIME ZONE 'UTC'
     WHERE user_id = $2
       AND type = 'file'
       AND (parent_id IN (SELECT id FROM target_folders) OR id = ANY($1::uuid[]))
 )
-DELETE FROM teldrive.files WHERE id IN (SELECT id FROM target_folders) AND type = 'folder';`
+DELETE FROM files WHERE id IN (SELECT id FROM target_folders) AND type = 'folder';`
 	_, err := cp.repos.Pool.Exec(cp.ctx, query, fileIDs, userID)
 	return err
 }

@@ -78,11 +78,8 @@ func TestConfigLoader_LoadDefaults(t *testing.T) {
 	assert.Equal(t, 10, cfg.Redis.MaxIdleConns)
 	assert.Equal(t, 5*time.Minute, cfg.Redis.ConnMaxIdleTime)
 	assert.Equal(t, time.Hour, cfg.Redis.ConnMaxLifetime)
-	assert.Equal(t, 50, cfg.Queue.DefaultWorkers)
-	assert.Equal(t, 4, cfg.Queue.UploadWorkers)
-	assert.Equal(t, 8, cfg.Jobs.SyncRun.MaxAttempts)
-	assert.Equal(t, 2, cfg.Jobs.SyncTransfer.MaxAttempts)
-	assert.Equal(t, 3*time.Hour, cfg.Jobs.SyncTransfer.Timeout)
+	assert.Equal(t, 30*time.Second, cfg.Worker.CronPollEvery)
+	assert.Equal(t, int64(2123216947), cfg.Worker.CronLockID)
 }
 
 func TestConfigLoader_LoadFromConfigFile(t *testing.T) {
@@ -510,20 +507,10 @@ func TestDefaultServerConfigMap(t *testing.T) {
 	assert.Equal(t, "", redis["addr"])
 	assert.Equal(t, "", redis["password"])
 
-	queue, ok := defaults["queue"].(map[string]any)
+	worker, ok := defaults["worker"].(map[string]any)
 	require.True(t, ok)
-	assert.Equal(t, 50, queue["default-workers"])
-	assert.Equal(t, 4, queue["upload-workers"])
-
-	jobs, ok := defaults["jobs"].(map[string]any)
-	require.True(t, ok)
-	syncRun, ok := jobs["sync-run"].(map[string]any)
-	require.True(t, ok)
-	assert.Equal(t, 8, syncRun["max-attempts"])
-	syncTransfer, ok := jobs["sync-transfer"].(map[string]any)
-	require.True(t, ok)
-	assert.Equal(t, 2, syncTransfer["max-attempts"])
-	assert.Equal(t, "3h", syncTransfer["timeout"])
+	assert.Equal(t, "30s", worker["cron-poll-every"])
+	assert.EqualValues(t, 2123216947, worker["cron-lock-id"])
 
 	tg, ok := defaults["tg"].(map[string]any)
 	require.True(t, ok)
