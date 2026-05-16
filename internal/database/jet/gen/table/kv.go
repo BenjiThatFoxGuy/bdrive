@@ -11,7 +11,7 @@ import (
 	"github.com/go-jet/jet/v2/postgres"
 )
 
-var Kv = newKvTable("teldrive", "kv", "")
+var Kv = newKvTable("", "kv", "")
 
 type kvTable struct {
 	postgres.Table

@@ -14,19 +14,19 @@ import (
 )
 
 type Files struct {
+	ID        uuid.UUID `sql:"primary_key"`
 	Name      string
 	Type      string
 	MimeType  string
 	Size      *int64
 	UserID    int64
+	ParentID  *uuid.UUID
 	Status    *string
 	ChannelID *int64
 	Parts     *types.JSONB[types.Parts]
-	CreatedAt time.Time
-	UpdatedAt time.Time
 	Encrypted bool
 	Category  *string
-	ID        uuid.UUID `sql:"primary_key"`
-	ParentID  *uuid.UUID
 	Hash      *string
+	CreatedAt time.Time
+	UpdatedAt time.Time
 }

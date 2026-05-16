@@ -11,18 +11,18 @@ import (
 	"github.com/go-jet/jet/v2/postgres"
 )
 
-var Sessions = newSessionsTable("teldrive", "sessions", "")
+var Sessions = newSessionsTable("", "sessions", "")
 
 type sessionsTable struct {
 	postgres.Table
 
 	// Columns
-	UserID           postgres.ColumnInteger
-	CreatedAt        postgres.ColumnTimestamp
-	SessionDate      postgres.ColumnInteger
 	ID               postgres.ColumnString
+	UserID           postgres.ColumnInteger
 	TgSession        postgres.ColumnString
+	SessionDate      postgres.ColumnInteger
 	RefreshTokenHash postgres.ColumnString
+	CreatedAt        postgres.ColumnTimestamp
 	UpdatedAt        postgres.ColumnTimestamp
 	RevokedAt        postgres.ColumnTimestamp
 
@@ -66,16 +66,16 @@ func newSessionsTable(schemaName, tableName, alias string) *SessionsTable {
 
 func newSessionsTableImpl(schemaName, tableName, alias string) sessionsTable {
 	var (
-		UserIDColumn           = postgres.IntegerColumn("user_id")
-		CreatedAtColumn        = postgres.TimestampColumn("created_at")
-		SessionDateColumn      = postgres.IntegerColumn("session_date")
 		IDColumn               = postgres.StringColumn("id")
+		UserIDColumn           = postgres.IntegerColumn("user_id")
 		TgSessionColumn        = postgres.StringColumn("tg_session")
+		SessionDateColumn      = postgres.IntegerColumn("session_date")
 		RefreshTokenHashColumn = postgres.StringColumn("refresh_token_hash")
+		CreatedAtColumn        = postgres.TimestampColumn("created_at")
 		UpdatedAtColumn        = postgres.TimestampColumn("updated_at")
 		RevokedAtColumn        = postgres.TimestampColumn("revoked_at")
-		allColumns             = postgres.ColumnList{UserIDColumn, CreatedAtColumn, SessionDateColumn, IDColumn, TgSessionColumn, RefreshTokenHashColumn, UpdatedAtColumn, RevokedAtColumn}
-		mutableColumns         = postgres.ColumnList{UserIDColumn, CreatedAtColumn, SessionDateColumn, TgSessionColumn, RefreshTokenHashColumn, UpdatedAtColumn, RevokedAtColumn}
+		allColumns             = postgres.ColumnList{IDColumn, UserIDColumn, TgSessionColumn, SessionDateColumn, RefreshTokenHashColumn, CreatedAtColumn, UpdatedAtColumn, RevokedAtColumn}
+		mutableColumns         = postgres.ColumnList{UserIDColumn, TgSessionColumn, SessionDateColumn, RefreshTokenHashColumn, CreatedAtColumn, UpdatedAtColumn, RevokedAtColumn}
 		defaultColumns         = postgres.ColumnList{CreatedAtColumn, UpdatedAtColumn}
 	)
 
@@ -83,12 +83,12 @@ func newSessionsTableImpl(schemaName, tableName, alias string) sessionsTable {
 		Table: postgres.NewTable(schemaName, tableName, alias, allColumns...),
 
 		//Columns
-		UserID:           UserIDColumn,
-		CreatedAt:        CreatedAtColumn,
-		SessionDate:      SessionDateColumn,
 		ID:               IDColumn,
+		UserID:           UserIDColumn,
 		TgSession:        TgSessionColumn,
+		SessionDate:      SessionDateColumn,
 		RefreshTokenHash: RefreshTokenHashColumn,
+		CreatedAt:        CreatedAtColumn,
 		UpdatedAt:        UpdatedAtColumn,
 		RevokedAt:        RevokedAtColumn,
 

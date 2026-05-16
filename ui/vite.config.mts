@@ -5,6 +5,7 @@ import Icons from "unplugin-icons/vite";
 import { defineConfig, loadEnv } from "vite";
 import tsconfigPaths from "vite-tsconfig-paths";
 import cp from "node:child_process";
+import { fileURLToPath } from "node:url";
 
 const commitHash = cp
   .execSync("git rev-parse --short HEAD")
@@ -58,5 +59,11 @@ export default defineConfig(({ mode }) => {
     define: {
       "import.meta.env.UI_VERSION": JSON.stringify(commitHash),
     },
+    resolve: {
+        alias: {
+          'file-browser': fileURLToPath(new URL('../../tw-file-browser/packages/fb', import.meta.url)),
+        },
+        preserveSymlinks: true,
+      },
   };
 });

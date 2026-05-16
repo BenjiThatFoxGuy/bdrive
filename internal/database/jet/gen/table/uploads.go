@@ -11,7 +11,7 @@ import (
 	"github.com/go-jet/jet/v2/postgres"
 )
 
-var Uploads = newUploadsTable("teldrive", "uploads", "")
+var Uploads = newUploadsTable("", "uploads", "")
 
 type uploadsTable struct {
 	postgres.Table
@@ -24,10 +24,10 @@ type uploadsTable struct {
 	PartID      postgres.ColumnInteger
 	ChannelID   postgres.ColumnInteger
 	Size        postgres.ColumnInteger
-	CreatedAt   postgres.ColumnTimestamp
 	Encrypted   postgres.ColumnBool
 	Salt        postgres.ColumnString
 	BlockHashes postgres.ColumnBytea
+	CreatedAt   postgres.ColumnTimestamp
 
 	AllColumns     postgres.ColumnList
 	MutableColumns postgres.ColumnList
@@ -76,13 +76,13 @@ func newUploadsTableImpl(schemaName, tableName, alias string) uploadsTable {
 		PartIDColumn      = postgres.IntegerColumn("part_id")
 		ChannelIDColumn   = postgres.IntegerColumn("channel_id")
 		SizeColumn        = postgres.IntegerColumn("size")
-		CreatedAtColumn   = postgres.TimestampColumn("created_at")
 		EncryptedColumn   = postgres.BoolColumn("encrypted")
 		SaltColumn        = postgres.StringColumn("salt")
 		BlockHashesColumn = postgres.ByteaColumn("block_hashes")
-		allColumns        = postgres.ColumnList{UploadIDColumn, NameColumn, UserIDColumn, PartNoColumn, PartIDColumn, ChannelIDColumn, SizeColumn, CreatedAtColumn, EncryptedColumn, SaltColumn, BlockHashesColumn}
-		mutableColumns    = postgres.ColumnList{UploadIDColumn, NameColumn, UserIDColumn, PartNoColumn, SizeColumn, CreatedAtColumn, EncryptedColumn, SaltColumn, BlockHashesColumn}
-		defaultColumns    = postgres.ColumnList{CreatedAtColumn, EncryptedColumn}
+		CreatedAtColumn   = postgres.TimestampColumn("created_at")
+		allColumns        = postgres.ColumnList{UploadIDColumn, NameColumn, UserIDColumn, PartNoColumn, PartIDColumn, ChannelIDColumn, SizeColumn, EncryptedColumn, SaltColumn, BlockHashesColumn, CreatedAtColumn}
+		mutableColumns    = postgres.ColumnList{UploadIDColumn, NameColumn, UserIDColumn, PartNoColumn, SizeColumn, EncryptedColumn, SaltColumn, BlockHashesColumn, CreatedAtColumn}
+		defaultColumns    = postgres.ColumnList{EncryptedColumn, CreatedAtColumn}
 	)
 
 	return uploadsTable{
@@ -96,10 +96,10 @@ func newUploadsTableImpl(schemaName, tableName, alias string) uploadsTable {
 		PartID:      PartIDColumn,
 		ChannelID:   ChannelIDColumn,
 		Size:        SizeColumn,
-		CreatedAt:   CreatedAtColumn,
 		Encrypted:   EncryptedColumn,
 		Salt:        SaltColumn,
 		BlockHashes: BlockHashesColumn,
+		CreatedAt:   CreatedAtColumn,
 
 		AllColumns:     allColumns,
 		MutableColumns: mutableColumns,

@@ -11,7 +11,7 @@ import (
 	"github.com/go-jet/jet/v2/postgres"
 )
 
-var APIKeys = newAPIKeysTable("teldrive", "api_keys", "")
+var APIKeys = newAPIKeysTable("", "api_keys", "")
 
 type aPIKeysTable struct {
 	postgres.Table
@@ -23,9 +23,9 @@ type aPIKeysTable struct {
 	TokenHash  postgres.ColumnString
 	ExpiresAt  postgres.ColumnTimestamp
 	LastUsedAt postgres.ColumnTimestamp
+	RevokedAt  postgres.ColumnTimestamp
 	CreatedAt  postgres.ColumnTimestamp
 	UpdatedAt  postgres.ColumnTimestamp
-	RevokedAt  postgres.ColumnTimestamp
 
 	AllColumns     postgres.ColumnList
 	MutableColumns postgres.ColumnList
@@ -73,11 +73,11 @@ func newAPIKeysTableImpl(schemaName, tableName, alias string) aPIKeysTable {
 		TokenHashColumn  = postgres.StringColumn("token_hash")
 		ExpiresAtColumn  = postgres.TimestampColumn("expires_at")
 		LastUsedAtColumn = postgres.TimestampColumn("last_used_at")
+		RevokedAtColumn  = postgres.TimestampColumn("revoked_at")
 		CreatedAtColumn  = postgres.TimestampColumn("created_at")
 		UpdatedAtColumn  = postgres.TimestampColumn("updated_at")
-		RevokedAtColumn  = postgres.TimestampColumn("revoked_at")
-		allColumns       = postgres.ColumnList{IDColumn, UserIDColumn, NameColumn, TokenHashColumn, ExpiresAtColumn, LastUsedAtColumn, CreatedAtColumn, UpdatedAtColumn, RevokedAtColumn}
-		mutableColumns   = postgres.ColumnList{UserIDColumn, NameColumn, TokenHashColumn, ExpiresAtColumn, LastUsedAtColumn, CreatedAtColumn, UpdatedAtColumn, RevokedAtColumn}
+		allColumns       = postgres.ColumnList{IDColumn, UserIDColumn, NameColumn, TokenHashColumn, ExpiresAtColumn, LastUsedAtColumn, RevokedAtColumn, CreatedAtColumn, UpdatedAtColumn}
+		mutableColumns   = postgres.ColumnList{UserIDColumn, NameColumn, TokenHashColumn, ExpiresAtColumn, LastUsedAtColumn, RevokedAtColumn, CreatedAtColumn, UpdatedAtColumn}
 		defaultColumns   = postgres.ColumnList{IDColumn, CreatedAtColumn, UpdatedAtColumn}
 	)
 
@@ -91,9 +91,9 @@ func newAPIKeysTableImpl(schemaName, tableName, alias string) aPIKeysTable {
 		TokenHash:  TokenHashColumn,
 		ExpiresAt:  ExpiresAtColumn,
 		LastUsedAt: LastUsedAtColumn,
+		RevokedAt:  RevokedAtColumn,
 		CreatedAt:  CreatedAtColumn,
 		UpdatedAt:  UpdatedAtColumn,
-		RevokedAt:  RevokedAtColumn,
 
 		AllColumns:     allColumns,
 		MutableColumns: mutableColumns,

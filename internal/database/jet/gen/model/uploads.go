@@ -19,8 +19,8 @@ type Uploads struct {
 	PartID      int32 `sql:"primary_key"`
 	ChannelID   int64 `sql:"primary_key"`
 	Size        int64
-	CreatedAt   *time.Time
 	Encrypted   bool
 	Salt        *string
 	BlockHashes *[]byte
+	CreatedAt   *time.Time
 }

@@ -22,6 +22,10 @@ type PeriodicJobs struct {
 	CronExpression string
 	Enabled        bool
 	System         bool
+	NextRunAt      time.Time
+	LastRunAt      *time.Time
+	LastState      string
+	LastError      *string
 	CreatedAt      time.Time
 	UpdatedAt      time.Time
 }

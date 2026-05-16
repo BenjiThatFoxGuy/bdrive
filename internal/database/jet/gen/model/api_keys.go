@@ -19,7 +19,7 @@ type APIKeys struct {
 	TokenHash  string
 	ExpiresAt  *time.Time
 	LastUsedAt *time.Time
+	RevokedAt  *time.Time
 	CreatedAt  time.Time
 	UpdatedAt  time.Time
-	RevokedAt  *time.Time
 }

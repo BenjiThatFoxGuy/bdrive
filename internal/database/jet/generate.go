@@ -4,14 +4,21 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strings"
 
 	"github.com/go-jet/jet/v2/generator/metadata"
 	"github.com/go-jet/jet/v2/generator/postgres"
 	"github.com/go-jet/jet/v2/generator/template"
 	postgres2 "github.com/go-jet/jet/v2/postgres"
+	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/jackc/pgx/v5/stdlib"
 )
 
-func Generate(dbURL, outputDir string) error {
+func Generate(pool *pgxpool.Pool, outputDir string) error {
+	std := stdlib.OpenDBFromPool(pool)
+	defer std.Close()
+
 	tmpOutputDir := filepath.Join(outputDir, "_tmp")
 	if err := os.RemoveAll(tmpOutputDir); err != nil {
 		return fmt.Errorf("clean temporary jet output: %w", err)
@@ -20,15 +27,18 @@ func Generate(dbURL, outputDir string) error {
 		return fmt.Errorf("create jet output directory: %w", err)
 	}
 
-	if err := postgres.GenerateDSN(
-		dbURL,
-		"teldrive",
+	if err := postgres.GenerateDB(
+		std,
+		"public",
 		tmpOutputDir,
 		template.Default(postgres2.Dialect).
 			UseSchema(func(schema metadata.Schema) template.Schema {
 				return template.DefaultSchema(schema).
 					UseModel(template.DefaultModel().
 						UseTable(func(table metadata.Table) template.TableModel {
+							if table.Name == "migrations" {
+								return  template.TableModel{Skip: true}
+							}
 							return template.DefaultTableModel(table).UseField(func(column metadata.Column) template.TableModelField {
 								defaultTableModelField := template.DefaultTableModelField(column)
 								if table.Name == "files" &&
@@ -60,7 +70,7 @@ func Generate(dbURL, outputDir string) error {
 }
 
 func flattenGeneratedArtifacts(tmpOutputDir, outputDir string) error {
-	nestedRoot := filepath.Join(tmpOutputDir, "teldrive_jet", "teldrive")
+	nestedRoot := filepath.Join(tmpOutputDir, "public")
 	for _, name := range []string{"enum", "model", "table"} {
 		src := filepath.Join(nestedRoot, name)
 		dst := filepath.Join(outputDir, name)
@@ -81,6 +91,54 @@ func flattenGeneratedArtifacts(tmpOutputDir, outputDir string) error {
 
 	if err := os.RemoveAll(tmpOutputDir); err != nil {
 		return fmt.Errorf("remove temporary jet output: %w", err)
+	}
+
+	if err := stripGeneratedTableSchemas(outputDir); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func stripGeneratedTableSchemas(root string) error {
+	paths := []string{}
+	err := filepath.WalkDir(root, func(path string, d os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if d.IsDir() {
+			return nil
+		}
+		if filepath.Ext(path) != ".go" {
+			return nil
+		}
+		if !strings.Contains(path, string(filepath.Separator)+"table"+string(filepath.Separator)) {
+			return nil
+		}
+		paths = append(paths, path)
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("walk generated table files: %w", err)
+	}
+
+	linePattern := regexp.MustCompile(`(?m)^(var\s+\w+\s*=\s*new\w+Table\()"[^"]*"(,\s*"[^"]*",\s*"[^"]*"\))$`)
+
+	for _, path := range paths {
+		contentBytes, readErr := os.ReadFile(path)
+		if readErr != nil {
+			return fmt.Errorf("read %s: %w", path, readErr)
+		}
+		content := string(contentBytes)
+
+		updated := linePattern.ReplaceAllString(content, `${1}""${2}`)
+		if updated == content {
+			continue
+		}
+
+		if writeErr := os.WriteFile(path, []byte(updated), 0o644); writeErr != nil {
+			return fmt.Errorf("write %s: %w", path, writeErr)
+		}
 	}
 
 	return nil

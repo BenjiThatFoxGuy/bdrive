@@ -17,7 +17,7 @@ type FileShares struct {
 	FileID    uuid.UUID
 	Password  *string
 	ExpiresAt *time.Time
+	UserID    int64
 	CreatedAt time.Time
 	UpdatedAt time.Time
-	UserID    int64
 }

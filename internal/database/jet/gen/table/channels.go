@@ -11,7 +11,7 @@ import (
 	"github.com/go-jet/jet/v2/postgres"
 )
 
-var Channels = newChannelsTable("teldrive", "channels", "")
+var Channels = newChannelsTable("", "channels", "")
 
 type channelsTable struct {
 	postgres.Table

@@ -11,7 +11,7 @@ import (
 	"github.com/go-jet/jet/v2/postgres"
 )
 
-var Events = newEventsTable("teldrive", "events", "")
+var Events = newEventsTable("", "events", "")
 
 type eventsTable struct {
 	postgres.Table

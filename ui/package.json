@@ -6,6 +6,7 @@
     "@heroui/react": "^3.0.5",
     "@heroui/styles": "^3.0.5",
     "@monaco-editor/react": "^4.7.0",
+    "@react-aria/interactions": "^3.28.0",
     "@tanstack/react-query": "^5.100.10",
     "@tanstack/react-router": "^1.170.1",
     "apexcharts": "^5.12.0",
@@ -72,10 +73,10 @@
     "format": "oxlint --fix ./src",
     "gen:api-client": "OPENAPI_SPEC=${OPENAPI_SPEC:-../openapi/openapi.yaml}; openapi-typescript \"$OPENAPI_SPEC\" -o ./src/lib/api.d.ts"
   },
-  "pnpm": {
-    "overrides": {
-      "react": "^19.2.6",
-      "react-dom": "^19.2.6"
-    }
+  "overrides": {
+    "react": "^19.2.6",
+    "react-dom": "^19.2.6",
+    "react-aria-components": "^1.17.0",
+    "typescript": "^6.0.3"
   }
 }

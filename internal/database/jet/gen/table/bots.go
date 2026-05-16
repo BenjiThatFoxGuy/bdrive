@@ -11,7 +11,7 @@ import (
 	"github.com/go-jet/jet/v2/postgres"
 )
 
-var Bots = newBotsTable("teldrive", "bots", "")
+var Bots = newBotsTable("", "bots", "")
 
 type botsTable struct {
 	postgres.Table

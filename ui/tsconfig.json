@@ -24,7 +24,8 @@
     "types": ["unplugin-icons/types/react"],
     "paths": {
       "@/*": ["./src/*"],
-      "tsdef": ["./node_modules/tsdef"]
+      "tsdef": ["./node_modules/tsdef"],
+       "file-browser": ["./../tw-file-browser/packages/fb"]
     }
   },
   "include": ["**/*.ts", "**/*.tsx", "vite.config.mts", "tailwind.config.ts"],

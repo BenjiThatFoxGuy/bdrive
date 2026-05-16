@@ -19,35 +19,68 @@ env:
   CGO_ENABLED: 0
 
 tasks:
-  default:
-    cmds:
-      - task: ui
-      - task: server
-  deps:
-    cmds:
-      - go mod download
-      - go mod tidy
 
-  ui:
-    desc: Build UI assets
+  # ────────────────────────────── Build ──────────────────────────────
+
+  default:
+    desc: Build all production artifacts
+    cmds:
+      - task: ui:build
+      - task: server:build
+
+  ui:build:
+    desc: Build UI assets for production
     dir: ui
     cmds:
       - bun install
       - bun run gen:api-client
       - bun run build
 
-  gen-api:
+  server:build:
+    desc: Build server binary
+    deps: [gen]
+    vars:
+      VERSION:
+        sh: go run scripts/release.go --version current
+    cmds:
+      - echo "Building backend for {{.GOOS}}/{{.GOARCH}}..."
+      - >
+        go build -trimpath -ldflags "-s -w
+          -X '{{.MODULE_PATH}}/internal/version.Version={{.VERSION}}'
+          -X '{{.MODULE_PATH}}/internal/version.CommitSHA={{.GIT_COMMIT}}'
+          " -o {{.BUILD_DIR}}/{{.APP_NAME}}{{.BINARY_EXTENSION}}
+
+  # ────────────────────────────── Dev ──────────────────────────────
+
+  dev:
+    desc: Run both backend and frontend dev servers (concurrently)
+    deps: [server:dev, ui:dev]
+
+  server:dev:
+    desc: Run Go dev server (hot-reload via go run)
+    cmds:
+      - go run main.go run
+
+  ui:dev:
+    desc: Run Vite dev server (HMR)
+    dir: ui
+    cmds:
+      - bun run dev
+
+  # ────────────────────────────── Code Generation ──────────────────────────────
+
+  gen:
+    desc: Run go:generate directives
+    cmds:
+      - go generate ./...
+
+  gen:api:
+    desc: Generate OpenAPI spec from TypeSpec
     dir: typespec
-    desc: Genereate API specs
     cmds:
       - bun i
       - bun run tsp:yml
       - go run ../scripts/postprocess-openapi/main.go
-
-  gen:
-    desc: Generate API code
-    cmds:
-      - go generate ./...
 
   gen:jet:
     desc: Regenerate Jet models from migrations
@@ -66,6 +99,8 @@ tasks:
       - mkdir -p docs/src/openapi
       - cp ./openapi/openapi.yaml ./docs/src/openapi/openapi.yaml
 
+  # ────────────────────────────── Docs Site ──────────────────────────────
+
   docs:dev:
     desc: Run docs site locally
     deps: [gen:docs]
@@ -82,34 +117,25 @@ tasks:
       - bun install
       - bun run docs:build
 
+  # ────────────────────────────── Quality ──────────────────────────────
+
+  deps:
+    desc: Install Go module dependencies
+    cmds:
+      - go mod download
+      - go mod tidy
+
   lint:
-    desc: Run linters
+    desc: Run Go linters
     cmds:
       - golangci-lint run
 
-  test:integration:
+  test:int:
     desc: Run integration tests with dockerized postgres
     cmds:
       - ./scripts/test-integration.sh
 
-  server:
-    desc: Build Server
-    deps: [gen]
-    vars:
-      VERSION:
-        sh: go run scripts/release.go --version current
-    cmds:
-      - echo "Building backend for {{.GOOS}}/{{.GOARCH}}..."
-      - >
-        go build -trimpath -ldflags "-s -w
-          -X '{{.MODULE_PATH}}/internal/version.Version={{.VERSION}}'
-          -X '{{.MODULE_PATH}}/internal/version.CommitSHA={{.GIT_COMMIT}}'
-          " -o {{.BUILD_DIR}}/{{.APP_NAME}}{{.BINARY_EXTENSION}}
-
-  run:
-    desc: Run Server
-    cmds:
-      - go run main.go run
+  # ────────────────────────────── Release ──────────────────────────────
 
   retag:
     desc: Retag a version

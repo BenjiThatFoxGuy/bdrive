@@ -1,103 +1,51 @@
-import { type SVGProps, memo } from "react";
-import { Button } from "@heroui/react";
-import IconBasilGoogleDriveOutline from "~icons/basil/google-drive-outline";
-import IconIcOutlineSdStorage from "~icons/ic/outline-sd-storage";
-import IconMdiRecent from "~icons/mdi/recent";
-import ShareIcon from "~icons/fluent/share-24-regular";
-import clsx from "clsx";
-import { AnimatePresence, motion } from "framer-motion";
-import { useLocation, useParams } from "@tanstack/react-router";
+import { Link } from "@tanstack/react-router";
 
-import { ForwardLink } from "@/components/forward-link";
+import { siteConfig } from "@/config/site";
+import { cn } from "@/lib/utils";
 
-export const categories = [
-  { icon: IconBasilGoogleDriveOutline, id: "my-drive", name: "My Drive" },
-  { icon: IconMdiRecent, id: "recent", name: "Recent" },
-  { icon: ShareIcon, id: "shared", name: "Shared" },
-  { icon: IconIcOutlineSdStorage, id: "storage", name: "Storage" },
-] as const;
-
-interface SidNavItemProps {
-  id: (typeof categories)[number]["id"];
-  icon: (props: SVGProps<SVGSVGElement>) => React.ReactNode;
-  name: string;
-}
-
-const SidNavItem = memo(({ id, icon: Icon, name }: SidNavItemProps) => {
-  const params = useParams({ strict: false }) as { view?: string };
-  const location = useLocation();
-
-  const isActive =
-    id === "storage"
-      ? location.pathname === "/storage"
-      : params.view === id;
-
+export const SideNav = ({ className }: { className?: string }) => {
   return (
-    <li className="flex flex-col gap-1 w-16 items-center">
-      <ForwardLink
-        to={id === "storage" ? "/storage" : "/$view"}
-        params={id === "storage" ? undefined : { view: id }}
-        search={id === "my-drive" ? { path: "/" } : {}}
-        preload="intent"
-        className={clsx(
-          "h-8 w-full max-w-16 rounded-3xl px-0 mx-auto inline-flex items-center justify-center",
-          "text-muted relative",
-          isActive && "text-accent-soft-foreground ",
-        )}
-      >
-        <AnimatePresence>
-          {isActive && (
-            <motion.div
-              layoutId="nav-indicator"
-              className="absolute inset-0 bg-accent-soft rounded-3xl -z-10"
-              initial={false}
-              transition={{
-                damping: 30,
-                stiffness: 300,
-                type: "spring",
-              }}
-            />
-          )}
-        </AnimatePresence>
-        <motion.div
-          animate={{
-            scale: isActive ? 1.1 : 1,
-          }}
-          transition={{
-            damping: 17,
-            stiffness: 400,
-            type: "spring",
-          }}
-          className="flex items-center justify-center relative z-10"
-        >
-          <Icon className="size-6" />
-        </motion.div>
-      </ForwardLink>
-      <p
-        className={clsx(
-          "text-xs transition-colors duration-200",
-          isActive ? "text-foreground font-medium" : "text-muted",
-        )}
-      >
-        {name}
-      </p>
-    </li>
-  );
-});
-
-export const SideNav = memo(() => (
     <aside
-      className={clsx(
-        "w-full md:w-20 md:pt-20 pt-0 h-16 md:h-full transition-colors duration-300",
+      className={cn(
+        "w-full h-20 md:w-24 md:h-full shrink-0 flex flex-row md:flex-col items-center justify-around md:justify-start md:pt-16 z-20 overflow-x-auto md:overflow-y-auto scrollbar-hide",
+        className,
       )}
     >
-      <ul
-        className="size-full flex flex-row justify-evenly md:justify-normal md:flex-col
-        items-center list-none gap-4 overflow-hidden py-2 md:py-0"
-      >
-        {categories.map((item) => (
-          <SidNavItem key={item.id} {...item} />
-        ))}
-      </ul>
+      {siteConfig.navItems.map((item) => (
+        <Link
+          key={item.id}
+          {...item.options}
+          preload="intent"
+          className="flex flex-col items-center gap-1 md:gap-2 md:mb-8 group relative"
+        >
+          {({ isActive }) => (
+            <>
+              <div
+                className={cn(
+                  "relative flex items-center justify-center size-10 md:size-12 rounded-xl transition-all duration-300 group-hover:text-accent",
+                  isActive && "text-accent shadow-glow",
+                )}
+              >
+                {isActive && (
+                  <div className="absolute -bottom-2 md:-bottom-auto md:-left-6 left-1/2 -translate-x-1/2 md:translate-x-0 top-auto md:top-1/2 md:-translate-y-1/2 w-8 h-1 md:w-1 md:h-8 bg-accent rounded-full shadow-[0_0_10px_var(--accent)]"></div>
+                )}
+                <div className={cn("h-5 w-5 md:h-6 md:w-6")}>
+                  {isActive ? <item.activeIcon /> : <item.icon />}
+                </div>
+              </div>
+
+              <span
+                className={cn(
+                  "text-label md:text-[10px] font-black transition-all duration-300 uppercase tracking-widest group-hover:text-accent",
+                  isActive && "text-accent",
+                )}
+              >
+                {item.label}
+              </span>
+            </>
+          )}
+        </Link>
+      ))}
     </aside>
-  ));
+  );
+};

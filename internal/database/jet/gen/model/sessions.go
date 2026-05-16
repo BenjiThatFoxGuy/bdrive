@@ -13,12 +13,12 @@ import (
 )
 
 type Sessions struct {
-	UserID           int64
-	CreatedAt        time.Time
-	SessionDate      *int32
 	ID               uuid.UUID `sql:"primary_key"`
+	UserID           int64
 	TgSession        string
+	SessionDate      *int32
 	RefreshTokenHash *string
+	CreatedAt        time.Time
 	UpdatedAt        time.Time
 	RevokedAt        *time.Time
 }

@@ -11,27 +11,27 @@ import (
 	"github.com/go-jet/jet/v2/postgres"
 )
 
-var Files = newFilesTable("teldrive", "files", "")
+var Files = newFilesTable("", "files", "")
 
 type filesTable struct {
 	postgres.Table
 
 	// Columns
+	ID        postgres.ColumnString
 	Name      postgres.ColumnString
 	Type      postgres.ColumnString
 	MimeType  postgres.ColumnString
 	Size      postgres.ColumnInteger
 	UserID    postgres.ColumnInteger
+	ParentID  postgres.ColumnString
 	Status    postgres.ColumnString
 	ChannelID postgres.ColumnInteger
 	Parts     postgres.ColumnString
-	CreatedAt postgres.ColumnTimestamp
-	UpdatedAt postgres.ColumnTimestamp
 	Encrypted postgres.ColumnBool
 	Category  postgres.ColumnString
-	ID        postgres.ColumnString
-	ParentID  postgres.ColumnString
 	Hash      postgres.ColumnString
+	CreatedAt postgres.ColumnTimestamp
+	UpdatedAt postgres.ColumnTimestamp
 
 	AllColumns     postgres.ColumnList
 	MutableColumns postgres.ColumnList
@@ -73,45 +73,45 @@ func newFilesTable(schemaName, tableName, alias string) *FilesTable {
 
 func newFilesTableImpl(schemaName, tableName, alias string) filesTable {
 	var (
+		IDColumn        = postgres.StringColumn("id")
 		NameColumn      = postgres.StringColumn("name")
 		TypeColumn      = postgres.StringColumn("type")
 		MimeTypeColumn  = postgres.StringColumn("mime_type")
 		SizeColumn      = postgres.IntegerColumn("size")
 		UserIDColumn    = postgres.IntegerColumn("user_id")
+		ParentIDColumn  = postgres.StringColumn("parent_id")
 		StatusColumn    = postgres.StringColumn("status")
 		ChannelIDColumn = postgres.IntegerColumn("channel_id")
 		PartsColumn     = postgres.StringColumn("parts")
-		CreatedAtColumn = postgres.TimestampColumn("created_at")
-		UpdatedAtColumn = postgres.TimestampColumn("updated_at")
 		EncryptedColumn = postgres.BoolColumn("encrypted")
 		CategoryColumn  = postgres.StringColumn("category")
-		IDColumn        = postgres.StringColumn("id")
-		ParentIDColumn  = postgres.StringColumn("parent_id")
 		HashColumn      = postgres.StringColumn("hash")
-		allColumns      = postgres.ColumnList{NameColumn, TypeColumn, MimeTypeColumn, SizeColumn, UserIDColumn, StatusColumn, ChannelIDColumn, PartsColumn, CreatedAtColumn, UpdatedAtColumn, EncryptedColumn, CategoryColumn, IDColumn, ParentIDColumn, HashColumn}
-		mutableColumns  = postgres.ColumnList{NameColumn, TypeColumn, MimeTypeColumn, SizeColumn, UserIDColumn, StatusColumn, ChannelIDColumn, PartsColumn, CreatedAtColumn, UpdatedAtColumn, EncryptedColumn, CategoryColumn, ParentIDColumn, HashColumn}
-		defaultColumns  = postgres.ColumnList{StatusColumn, CreatedAtColumn, UpdatedAtColumn, EncryptedColumn, IDColumn}
+		CreatedAtColumn = postgres.TimestampColumn("created_at")
+		UpdatedAtColumn = postgres.TimestampColumn("updated_at")
+		allColumns      = postgres.ColumnList{IDColumn, NameColumn, TypeColumn, MimeTypeColumn, SizeColumn, UserIDColumn, ParentIDColumn, StatusColumn, ChannelIDColumn, PartsColumn, EncryptedColumn, CategoryColumn, HashColumn, CreatedAtColumn, UpdatedAtColumn}
+		mutableColumns  = postgres.ColumnList{NameColumn, TypeColumn, MimeTypeColumn, SizeColumn, UserIDColumn, ParentIDColumn, StatusColumn, ChannelIDColumn, PartsColumn, EncryptedColumn, CategoryColumn, HashColumn, CreatedAtColumn, UpdatedAtColumn}
+		defaultColumns  = postgres.ColumnList{IDColumn, StatusColumn, EncryptedColumn, CreatedAtColumn, UpdatedAtColumn}
 	)
 
 	return filesTable{
 		Table: postgres.NewTable(schemaName, tableName, alias, allColumns...),
 
 		//Columns
+		ID:        IDColumn,
 		Name:      NameColumn,
 		Type:      TypeColumn,
 		MimeType:  MimeTypeColumn,
 		Size:      SizeColumn,
 		UserID:    UserIDColumn,
+		ParentID:  ParentIDColumn,
 		Status:    StatusColumn,
 		ChannelID: ChannelIDColumn,
 		Parts:     PartsColumn,
-		CreatedAt: CreatedAtColumn,
-		UpdatedAt: UpdatedAtColumn,
 		Encrypted: EncryptedColumn,
 		Category:  CategoryColumn,
-		ID:        IDColumn,
-		ParentID:  ParentIDColumn,
 		Hash:      HashColumn,
+		CreatedAt: CreatedAtColumn,
+		UpdatedAt: UpdatedAtColumn,
 
 		AllColumns:     allColumns,
 		MutableColumns: mutableColumns,

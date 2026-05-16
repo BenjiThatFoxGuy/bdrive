@@ -1,12 +1,14 @@
 import { type ChangeEvent, memo, useCallback, useEffect, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { Link, useNavigate } from "@tanstack/react-router";
+import { useNavigate } from "@tanstack/react-router";
 import { Button, Input } from "@heroui/react";
 import IconBiSearch from "~icons/bi/search";
 import MdiFilterOutline from "~icons/mdi/filter-outline";
-import PhTelegramLogoFill from "~icons/ph/telegram-logo-fill";
 import clsx from "clsx";
 import debounce from "lodash.debounce";
+
+import { Link } from "@tanstack/react-router";
+import PhTelegramLogoFill from "~icons/ph/telegram-logo-fill";
 
 import { ProfileDropDown } from "./menus/profile";
 import { SearchMenu } from "./menus/search/search";
@@ -101,20 +103,18 @@ const SearchBar = memo(({ className }: SearchBarProps) => {
 });
 
 export default memo(({ auth }: { auth?: boolean }) => (
-    <header className="sticky top-0 z-50 flex items-center min-h-12 xs:min-h-16 px-4">
-      <div className="flex-1 flex gap-2 items-center">
-        <Link
-          to="/$view"
-          params={{ view: "my-drive" }}
-          search={{ path: "/" }}
-          className="flex gap-2 items-center cursor-pointer"
-        >
-          <PhTelegramLogoFill className="size-6 text-inherit" />
-          <p className="text-2xl hidden sm:block">Teldrive</p>
-        </Link>
-      </div>
-      <div className="flex-1 flex justify-end items-center gap-4">
-        {auth && <SearchBar className="hidden xs:block" />}
+    <header className="sticky top-0 z-50 flex items-center min-h-12 xs:min-h-16 px-4 gap-4 pt-2">
+      <Link
+        to="/$view"
+        params={{ view: "my-drive" }}
+        search={{ path: "/" }}
+        className="flex items-center gap-2 cursor-pointer"
+      >
+        <PhTelegramLogoFill className="size-6 text-accent" />
+        <p className="text-xl font-black hidden sm:block">TelDrive</p>
+      </Link>
+      <div className="flex items-center gap-4 ml-auto">
+        {auth && <SearchBar />}
         <ThemeToggle />
         {auth && <ProfileDropDown />}
       </div>

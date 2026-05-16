@@ -11,7 +11,7 @@ import (
 	"github.com/go-jet/jet/v2/postgres"
 )
 
-var FileShares = newFileSharesTable("teldrive", "file_shares", "")
+var FileShares = newFileSharesTable("", "file_shares", "")
 
 type fileSharesTable struct {
 	postgres.Table
@@ -21,9 +21,9 @@ type fileSharesTable struct {
 	FileID    postgres.ColumnString
 	Password  postgres.ColumnString
 	ExpiresAt postgres.ColumnTimestamp
+	UserID    postgres.ColumnInteger
 	CreatedAt postgres.ColumnTimestamp
 	UpdatedAt postgres.ColumnTimestamp
-	UserID    postgres.ColumnInteger
 
 	AllColumns     postgres.ColumnList
 	MutableColumns postgres.ColumnList
@@ -69,11 +69,11 @@ func newFileSharesTableImpl(schemaName, tableName, alias string) fileSharesTable
 		FileIDColumn    = postgres.StringColumn("file_id")
 		PasswordColumn  = postgres.StringColumn("password")
 		ExpiresAtColumn = postgres.TimestampColumn("expires_at")
+		UserIDColumn    = postgres.IntegerColumn("user_id")
 		CreatedAtColumn = postgres.TimestampColumn("created_at")
 		UpdatedAtColumn = postgres.TimestampColumn("updated_at")
-		UserIDColumn    = postgres.IntegerColumn("user_id")
-		allColumns      = postgres.ColumnList{IDColumn, FileIDColumn, PasswordColumn, ExpiresAtColumn, CreatedAtColumn, UpdatedAtColumn, UserIDColumn}
-		mutableColumns  = postgres.ColumnList{FileIDColumn, PasswordColumn, ExpiresAtColumn, CreatedAtColumn, UpdatedAtColumn, UserIDColumn}
+		allColumns      = postgres.ColumnList{IDColumn, FileIDColumn, PasswordColumn, ExpiresAtColumn, UserIDColumn, CreatedAtColumn, UpdatedAtColumn}
+		mutableColumns  = postgres.ColumnList{FileIDColumn, PasswordColumn, ExpiresAtColumn, UserIDColumn, CreatedAtColumn, UpdatedAtColumn}
 		defaultColumns  = postgres.ColumnList{IDColumn, CreatedAtColumn, UpdatedAtColumn}
 	)
 
@@ -85,9 +85,9 @@ func newFileSharesTableImpl(schemaName, tableName, alias string) fileSharesTable
 		FileID:    FileIDColumn,
 		Password:  PasswordColumn,
 		ExpiresAt: ExpiresAtColumn,
+		UserID:    UserIDColumn,
 		CreatedAt: CreatedAtColumn,
 		UpdatedAt: UpdatedAtColumn,
-		UserID:    UserIDColumn,
 
 		AllColumns:     allColumns,
 		MutableColumns: mutableColumns,

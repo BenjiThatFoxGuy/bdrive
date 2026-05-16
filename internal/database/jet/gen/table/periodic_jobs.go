@@ -11,7 +11,7 @@ import (
 	"github.com/go-jet/jet/v2/postgres"
 )
 
-var PeriodicJobs = newPeriodicJobsTable("teldrive", "periodic_jobs", "")
+var PeriodicJobs = newPeriodicJobsTable("", "periodic_jobs", "")
 
 type periodicJobsTable struct {
 	postgres.Table
@@ -25,6 +25,10 @@ type periodicJobsTable struct {
 	CronExpression postgres.ColumnString
 	Enabled        postgres.ColumnBool
 	System         postgres.ColumnBool
+	NextRunAt      postgres.ColumnTimestampz
+	LastRunAt      postgres.ColumnTimestampz
+	LastState      postgres.ColumnString
+	LastError      postgres.ColumnString
 	CreatedAt      postgres.ColumnTimestampz
 	UpdatedAt      postgres.ColumnTimestampz
 
@@ -76,11 +80,15 @@ func newPeriodicJobsTableImpl(schemaName, tableName, alias string) periodicJobsT
 		CronExpressionColumn = postgres.StringColumn("cron_expression")
 		EnabledColumn        = postgres.BoolColumn("enabled")
 		SystemColumn         = postgres.BoolColumn("system")
+		NextRunAtColumn      = postgres.TimestampzColumn("next_run_at")
+		LastRunAtColumn      = postgres.TimestampzColumn("last_run_at")
+		LastStateColumn      = postgres.StringColumn("last_state")
+		LastErrorColumn      = postgres.StringColumn("last_error")
 		CreatedAtColumn      = postgres.TimestampzColumn("created_at")
 		UpdatedAtColumn      = postgres.TimestampzColumn("updated_at")
-		allColumns           = postgres.ColumnList{IDColumn, UserIDColumn, NameColumn, KindColumn, ArgsColumn, CronExpressionColumn, EnabledColumn, SystemColumn, CreatedAtColumn, UpdatedAtColumn}
-		mutableColumns       = postgres.ColumnList{UserIDColumn, NameColumn, KindColumn, ArgsColumn, CronExpressionColumn, EnabledColumn, SystemColumn, CreatedAtColumn, UpdatedAtColumn}
-		defaultColumns       = postgres.ColumnList{IDColumn, ArgsColumn, EnabledColumn, SystemColumn, CreatedAtColumn, UpdatedAtColumn}
+		allColumns           = postgres.ColumnList{IDColumn, UserIDColumn, NameColumn, KindColumn, ArgsColumn, CronExpressionColumn, EnabledColumn, SystemColumn, NextRunAtColumn, LastRunAtColumn, LastStateColumn, LastErrorColumn, CreatedAtColumn, UpdatedAtColumn}
+		mutableColumns       = postgres.ColumnList{UserIDColumn, NameColumn, KindColumn, ArgsColumn, CronExpressionColumn, EnabledColumn, SystemColumn, NextRunAtColumn, LastRunAtColumn, LastStateColumn, LastErrorColumn, CreatedAtColumn, UpdatedAtColumn}
+		defaultColumns       = postgres.ColumnList{IDColumn, ArgsColumn, EnabledColumn, SystemColumn, NextRunAtColumn, LastStateColumn, CreatedAtColumn, UpdatedAtColumn}
 	)
 
 	return periodicJobsTable{
@@ -95,6 +103,10 @@ func newPeriodicJobsTableImpl(schemaName, tableName, alias string) periodicJobsT
 		CronExpression: CronExpressionColumn,
 		Enabled:        EnabledColumn,
 		System:         SystemColumn,
+		NextRunAt:      NextRunAtColumn,
+		LastRunAt:      LastRunAtColumn,
+		LastState:      LastStateColumn,
+		LastError:      LastErrorColumn,
 		CreatedAt:      CreatedAtColumn,
 		UpdatedAt:      UpdatedAtColumn,
 
