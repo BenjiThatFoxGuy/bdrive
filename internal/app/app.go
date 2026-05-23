@@ -6,7 +6,10 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"os"
+	"path/filepath"
 	"regexp"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -110,11 +113,18 @@ func New(ctx context.Context, cfg *config.ServerCmdConfig) (_ *App, err error) {
 	}, logging.Component("EVENT"))
 	cleanups = append(cleanups, broadcaster.Shutdown)
 
-	// Stream content disk cache (varc). Disabled when StreamDir is empty.
+	// Stream content disk cache (varc). Expand ~ to home dir.
 	var varcCache *varc.Cache
 	if cfg.Cache.StreamDir != "" {
+		cacheDir := cfg.Cache.StreamDir
+		if strings.HasPrefix(cacheDir, "~") {
+			home, err := os.UserHomeDir()
+			if err == nil {
+				cacheDir = filepath.Join(home, cacheDir[1:])
+			}
+		}
 		varcCache, err = varc.New(ctx, varc.Options{
-			CacheDir:     cfg.Cache.StreamDir,
+			CacheDir:     cacheDir,
 			CacheMaxAge:  cfg.Cache.StreamMaxAge,
 			CacheMaxSize: cfg.Cache.StreamMaxSize,
 		})

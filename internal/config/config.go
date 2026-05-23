@@ -85,7 +85,7 @@ type ServerConfig struct {
 
 type CacheConfig struct {
 	MaxSize       int           `default:"10485760" description:"Maximum cache size in bytes (used for memory cache)"`
-	StreamDir     string        `default:"" description:"Directory for stream content disk cache (empty = disabled)"`
+	StreamDir     string        `default:"~/.teldrive/cache" description:"Directory for stream content disk cache"`
 	StreamMaxAge  time.Duration `default:"168h" description:"Maximum age for cached stream chunks"`
 	StreamMaxSize int64         `default:"10737418240" description:"Maximum stream cache size in bytes"`
 }

@@ -165,7 +165,6 @@ func (s *rawService) streamFile(ctx context.Context, w http.ResponseWriter, file
 		tokens = tokens[:limit]
 	}
 	var (
-		lr     io.ReadCloser
 		client TelegramClient
 		token  string
 	)
@@ -204,15 +203,15 @@ func (s *rawService) streamFile(ctx context.Context, w http.ResponseWriter, file
 		}
 		fileRef := &reader.FileRef{ID: file.ID.String(), ChannelID: *file.ChannelID, Encrypted: file.Encrypted}
 
-		if s.api.varcCache != nil {
-			// Seekable reader for the full file, wrapped in varc disk cache.
-			r, err := reader.NewReader(ctx, client.API(), s.api.cache, fileRef, parts, &s.api.cnf.TG, botID)
-			if err != nil {
-				return err
-			}
-			defer r.Close()
+		// Seekable reader for the full file — used directly or wrapped in varc.
+		seekReader, err := reader.NewReader(ctx, client.API(), s.api.cache, fileRef, parts, &s.api.cnf.TG, botID)
+		if err != nil {
+			return err
+		}
+		defer seekReader.Close()
 
-			vr, err := s.api.varcCache.OpenReadSeeker(ctx, r,
+		if s.api.varcCache != nil {
+			vr, err := s.api.varcCache.OpenReadSeeker(ctx, seekReader,
 				varc.WithKey(file.ID.String()),
 				varc.WithFingerprint(file.ID.String()+strconv.FormatInt(*file.Size, 10)),
 			)
@@ -221,24 +220,21 @@ func (s *rawService) streamFile(ctx context.Context, w http.ResponseWriter, file
 			}
 			defer vr.Close()
 
+			// Seek to the requested byte range — varc caches the entire
+			// file but we only serve one HTTP range at a time.
+			if _, err := vr.Seek(start, io.SeekStart); err != nil {
+				return fmt.Errorf("varc seek: %w", err)
+			}
 			_, err = io.CopyN(w, vr, contentLength)
 			return err
 		}
 
-		// Legacy path: range-limited reader without caching.
-		lr, err = reader.NewReader(ctx, client.API(), s.api.cache, fileRef, parts, &s.api.cnf.TG, botID)
-		if err != nil {
-			return err
+		// No disk cache — seek directly and copy.
+		if _, err := seekReader.Seek(start, io.SeekStart); err != nil {
+			return fmt.Errorf("reader seek: %w", err)
 		}
-		if lr == nil {
-			return fmt.Errorf("failed to initialise reader")
-		}
-		lr = readCloserAdapter{r: io.LimitReader(lr, contentLength), c: lr}
-		_, err = io.Copy(w, lr)
-		if err != nil {
-			_ = lr.Close()
-		}
-		return nil
+		_, err = io.CopyN(w, seekReader, contentLength)
+		return err
 	}
 	return s.api.telegram.RunWithAuth(ctx, client, token, func(ctx context.Context) error { return handleStream() })
 }
@@ -262,11 +258,4 @@ func (s *rawService) fetchParts(ctx context.Context, client TelegramClient, file
 	})
 }
 
-// readCloserAdapter wraps an io.Reader + io.Closer into an io.ReadCloser.
-type readCloserAdapter struct {
-	r io.Reader
-	c io.Closer
-}
 
-func (a readCloserAdapter) Read(p []byte) (int, error)  { return a.r.Read(p) }
-func (a readCloserAdapter) Close() error                 { return a.c.Close() }
