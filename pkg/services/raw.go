@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	varc "github.com/tgdrive/varc"
 	"github.com/tgdrive/teldrive/internal/api"
 	"github.com/tgdrive/teldrive/internal/auth"
 	"github.com/tgdrive/teldrive/internal/cache"
@@ -202,14 +203,38 @@ func (s *rawService) streamFile(ctx context.Context, w http.ResponseWriter, file
 			return err
 		}
 		fileRef := &reader.FileRef{ID: file.ID.String(), ChannelID: *file.ChannelID, Encrypted: file.Encrypted}
-		lr, err = reader.NewReader(ctx, client.API(), s.api.cache, fileRef, parts, start, end, &s.api.cnf.TG, botID)
+
+		if s.api.varcCache != nil {
+			// Seekable reader for the full file, wrapped in varc disk cache.
+			r, err := reader.NewReader(ctx, client.API(), s.api.cache, fileRef, parts, &s.api.cnf.TG, botID)
+			if err != nil {
+				return err
+			}
+			defer r.Close()
+
+			vr, err := s.api.varcCache.OpenReadSeeker(ctx, r,
+				varc.WithKey(file.ID.String()),
+				varc.WithFingerprint(file.ID.String()+strconv.FormatInt(*file.Size, 10)),
+			)
+			if err != nil {
+				return fmt.Errorf("varc open: %w", err)
+			}
+			defer vr.Close()
+
+			_, err = io.CopyN(w, vr, contentLength)
+			return err
+		}
+
+		// Legacy path: range-limited reader without caching.
+		lr, err = reader.NewReader(ctx, client.API(), s.api.cache, fileRef, parts, &s.api.cnf.TG, botID)
 		if err != nil {
 			return err
 		}
 		if lr == nil {
 			return fmt.Errorf("failed to initialise reader")
 		}
-		_, err = io.CopyN(w, lr, contentLength)
+		lr = readCloserAdapter{r: io.LimitReader(lr, contentLength), c: lr}
+		_, err = io.Copy(w, lr)
 		if err != nil {
 			_ = lr.Close()
 		}
@@ -236,3 +261,12 @@ func (s *rawService) fetchParts(ctx context.Context, client TelegramClient, file
 		return parts, nil
 	})
 }
+
+// readCloserAdapter wraps an io.Reader + io.Closer into an io.ReadCloser.
+type readCloserAdapter struct {
+	r io.Reader
+	c io.Closer
+}
+
+func (a readCloserAdapter) Read(p []byte) (int, error)  { return a.r.Read(p) }
+func (a readCloserAdapter) Close() error                 { return a.c.Close() }

@@ -12,6 +12,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	chimiddleware "github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
+	varc "github.com/tgdrive/varc"
 	"github.com/tgdrive/teldrive/internal/api"
 	"github.com/tgdrive/teldrive/internal/auth"
 	"github.com/tgdrive/teldrive/internal/banner"
@@ -109,7 +110,21 @@ func New(ctx context.Context, cfg *config.ServerCmdConfig) (_ *App, err error) {
 	}, logging.Component("EVENT"))
 	cleanups = append(cleanups, broadcaster.Shutdown)
 
-	httpServer, bgWorker, err := buildServer(ctx, cfg, repos, cacher, log, botSelector, broadcaster)
+	// Stream content disk cache (varc). Disabled when StreamDir is empty.
+	var varcCache *varc.Cache
+	if cfg.Cache.StreamDir != "" {
+		varcCache, err = varc.New(ctx, varc.Options{
+			CacheDir:     cfg.Cache.StreamDir,
+			CacheMaxAge:  cfg.Cache.StreamMaxAge,
+			CacheMaxSize: cfg.Cache.StreamMaxSize,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("varc cache: %w", err)
+		}
+		cleanups = append(cleanups, func() { _ = varcCache.Close() })
+	}
+
+	httpServer, bgWorker, err := buildServer(ctx, cfg, repos, cacher, varcCache, log, botSelector, broadcaster)
 	if err != nil {
 		return nil, err
 	}
@@ -250,14 +265,14 @@ func findAvailablePort(startPort int) (int, error) {
 	return 0, fmt.Errorf("no available ports found between %d and %d", startPort, startPort+100)
 }
 
-func buildServer(ctx context.Context, cfg *config.ServerCmdConfig, repos *repositories.Repositories, cacher cache.Cacher, log *zap.Logger, botSelector tgc.BotSelector, broadcaster events.EventBroadcaster) (*http.Server, *worker.Worker, error) {
+func buildServer(ctx context.Context, cfg *config.ServerCmdConfig, repos *repositories.Repositories, cacher cache.Cacher, varcCache *varc.Cache, log *zap.Logger, botSelector tgc.BotSelector, broadcaster events.EventBroadcaster) (*http.Server, *worker.Worker, error) {
 	channelManager := tgc.NewChannelManager(repos, cacher, &cfg.TG)
 	telegramService := services.NewTelegramService(repos, cacher, &cfg.TG, botSelector)
 
 	// Create worker store (shared between API and worker pool)
 	workerStore := worker.NewStore(repos.Pool)
 
-	apiSrv := services.NewApiService(repos, channelManager, cfg, cacher, telegramService, broadcaster, workerStore)
+	apiSrv := services.NewApiService(repos, channelManager, cfg, cacher, varcCache, telegramService, broadcaster, workerStore)
 
 	// Create job executor and worker pool
 	jobExec := services.NewJobExecutor(apiSrv)

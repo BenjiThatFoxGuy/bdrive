@@ -13,182 +13,204 @@ import (
 	"github.com/tgdrive/teldrive/pkg/types"
 )
 
-type Range struct {
-	Start, End int64
-	PartNo     int64
-}
-
-type Reader struct {
-	ctx         context.Context
-	file        *FileRef
-	parts       []types.Part
-	ranges      []Range
-	pos         int
-	reader      io.ReadCloser
-	remaining   int64
-	config      *config.TGConfig
-	client      *tg.Client
-	concurrency int
-	cache       cache.Cacher
-	closeOnce   sync.Once
-	closeErr    error
-	botID       string
-}
-
+// FileRef identifies a file stored in Telegram channels.
 type FileRef struct {
 	ID        string
 	ChannelID int64
 	Encrypted bool
 }
 
-func calculatePartByteRanges(start, end, partSize int64) []Range {
-	ranges := make([]Range, 0)
-	startPart := start / partSize
-	endPart := end / partSize
-
-	for part := startPart; part <= endPart; part++ {
-		partStart := max(start-part*partSize, 0)
-		partEnd := min(partSize-1, end-part*partSize)
-		ranges = append(ranges, Range{
-			Start:  partStart,
-			End:    partEnd,
-			PartNo: part,
-		})
-	}
-	return ranges
+// Reader is a seekable, streaming byte reader for teldrive files.
+// It implements io.ReadSeeker + io.Closer so callers can use it directly
+// or wrap it with varc.Cache.OpenReadSeeker for disk-backed caching.
+type Reader struct {
+	ctx         context.Context
+	file        *FileRef
+	parts       []types.Part
+	totalSize   int64
+	position    int64
+	reader      io.ReadCloser
+	readerStart int64
+	readerLen   int64
+	config      *config.TGConfig
+	client      *tg.Client
+	cache       cache.Cacher
+	closeOnce   sync.Once
+	closeErr    error
+	botID       string
 }
 
+// NewReader creates a seekable Reader for the full file.
+// Unlike the old version there is no [start, end] range parameter — the
+// Reader always represents the entire file. Call io.LimitReader or varc to
+// restrict the output range.
 func NewReader(ctx context.Context,
 	client *tg.Client,
 	cache cache.Cacher,
 	file *FileRef,
 	parts []types.Part,
-	start,
-	end int64,
 	config *config.TGConfig,
 	botID string,
-) (io.ReadCloser, error) {
+) (*Reader, error) {
 
-	size := parts[0].Size
-	if file.Encrypted {
-		size = parts[0].DecryptedSize
+	var totalSize int64
+	for _, p := range parts {
+		if file.Encrypted {
+			totalSize += p.DecryptedSize
+		} else {
+			totalSize += p.Size
+		}
 	}
-	r := &Reader{
-		ctx:       ctx,
-		parts:     parts,
-		file:      file,
-		remaining: end - start + 1,
-		ranges:    calculatePartByteRanges(start, end, size),
-		config:    config,
-		client:    client,
-		cache:     cache,
-		botID:     botID,
+	if totalSize == 0 {
+		return nil, fmt.Errorf("empty file")
 	}
 
-	if err := r.initializeReader(); err != nil {
-		return nil, err
-	}
-	return r, nil
+	return &Reader{
+		ctx:   ctx,
+		parts: parts,
+		file:  file,
+		totalSize: totalSize,
+		config: config,
+		client: client,
+		cache:  cache,
+		botID:  botID,
+	}, nil
 }
 
+// Read reads up to len(p) bytes from the current file position.
 func (r *Reader) Read(p []byte) (int, error) {
-	if r.remaining <= 0 {
+	if r.position >= r.totalSize {
 		return 0, io.EOF
 	}
 
-	n, err := r.reader.Read(p)
-	r.remaining -= int64(n)
-
-	if err == io.EOF && r.remaining > 0 {
-		if err := r.moveToNextPart(); err != nil {
-			return n, err
+	if r.reader == nil {
+		if err := r.openReader(); err != nil {
+			return 0, err
 		}
-		err = nil
+	}
+
+	// Don't read past the current part reader's range.
+	readable := r.readerLen - (r.position - r.readerStart)
+	if readable <= 0 {
+		r.closeCurrentReader()
+		return r.Read(p)
+	}
+	if int64(len(p)) > readable {
+		p = p[:readable]
+	}
+
+	n, err := r.reader.Read(p)
+	r.position += int64(n)
+
+	if err == io.EOF {
+		r.closeCurrentReader()
+		// There may be more parts — only propagate EOF at the very end.
+		if r.position < r.totalSize {
+			err = nil
+		}
 	}
 
 	return n, err
 }
 
+// Seek repositions the file offset for the next Read call.
+func (r *Reader) Seek(offset int64, whence int) (int64, error) {
+	var abs int64
+	switch whence {
+	case io.SeekStart:
+		abs = offset
+	case io.SeekCurrent:
+		abs = r.position + offset
+	case io.SeekEnd:
+		abs = r.totalSize + offset
+	default:
+		return r.position, fmt.Errorf("reader: invalid whence %d", whence)
+	}
+	if abs < 0 {
+		abs = 0
+	}
+	if abs > r.totalSize {
+		abs = r.totalSize
+	}
+
+	// Keep the current reader if the new position falls inside its range.
+	if r.reader != nil {
+		if abs < r.readerStart || abs >= r.readerStart+r.readerLen {
+			r.closeCurrentReader()
+		}
+	}
+
+	r.position = abs
+	return r.position, nil
+}
+
+// Close closes the reader and releases underlying Telegram connections.
 func (r *Reader) Close() error {
 	r.closeOnce.Do(func() {
-		if r.reader != nil {
-			r.closeErr = r.reader.Close()
-			r.reader = nil
-		}
+		r.closeCurrentReader()
 	})
 	return r.closeErr
 }
 
-func (r *Reader) initializeReader() error {
-	reader, err := r.getPartReader()
-	if err != nil {
-		return err
-	}
-	r.reader = reader
-	return nil
-}
+// openReader resolves the current position to a part and creates the
+// corresponding part reader (raw or decrypted).
+func (r *Reader) openReader() error {
+	var cumSize int64
+	for _, p := range r.parts {
+		partSize := p.Size
+		if r.file.Encrypted {
+			partSize = p.DecryptedSize
+		}
+		if r.position < cumSize+partSize {
+			offsetInPart := r.position - cumSize
+			bytesLeftInPart := partSize - offsetInPart
 
-func (r *Reader) moveToNextPart() error {
-	r.reader.Close()
-	r.pos++
-	if r.pos < len(r.ranges) {
-		return r.initializeReader()
+			chunkSrc := &chunkSource{
+				channelId:   r.file.ChannelID,
+				partId:      p.ID,
+				client:      r.client,
+				concurrency: r.config.Stream.Concurrency,
+				cache:       r.cache,
+				key:         cache.KeyFileLocation(r.config.SessionInstance, r.botID, r.file.ID, p.ID),
+			}
+
+			partEnd := offsetInPart + bytesLeftInPart - 1
+
+			if r.file.Encrypted {
+				ciph, err := crypt.NewCipher(r.config.Uploads.EncryptionKey, p.Salt)
+				if err != nil {
+					return fmt.Errorf("reader: new cipher: %w", err)
+				}
+				decReader, err := ciph.DecryptDataSeek(r.ctx,
+					func(ctx context.Context, underlyingOffset, underlyingLimit int64) (io.ReadCloser, error) {
+						end := min(p.Size-1, underlyingOffset+underlyingLimit-1)
+						return newTGMultiReader(r.ctx, underlyingOffset, end, r.config, chunkSrc)
+					}, offsetInPart, bytesLeftInPart)
+				if err != nil {
+					return fmt.Errorf("reader: decrypt: %w", err)
+				}
+				r.reader = decReader
+			} else {
+				rawReader, err := newTGMultiReader(r.ctx, offsetInPart, partEnd, r.config, chunkSrc)
+				if err != nil {
+					return fmt.Errorf("reader: tg multi reader: %w", err)
+				}
+				r.reader = rawReader
+			}
+
+			r.readerStart = r.position
+			r.readerLen = bytesLeftInPart
+			return nil
+		}
+		cumSize += partSize
 	}
+
 	return io.EOF
 }
 
-func (r *Reader) getPartReader() (io.ReadCloser, error) {
-	if r.pos < 0 || r.pos >= len(r.ranges) {
-		return nil, fmt.Errorf("reader position %d out of range [0, %d)", r.pos, len(r.ranges))
+func (r *Reader) closeCurrentReader() {
+	if r.reader != nil {
+		r.closeErr = r.reader.Close()
+		r.reader = nil
 	}
-	currentRange := r.ranges[r.pos]
-	// r.ranges is built from user-visible byte offsets and r.parts is
-	// populated from the file row in storage. The two can drift (for
-	// example when a file's parts list changes between request and
-	// response), and a stale currentRange.PartNo then indexes past the
-	// end of r.parts and panics the whole stream goroutine with an
-	// index-out-of-range mid-download (#553). Surface a normal error
-	// instead so the HTTP handler returns 500 rather than killing the
-	// server.
-	if currentRange.PartNo < 0 || currentRange.PartNo >= int64(len(r.parts)) {
-		return nil, fmt.Errorf("part number %d out of range for file with %d parts", currentRange.PartNo, len(r.parts))
-	}
-	partId := r.parts[currentRange.PartNo].ID
-
-	chunkSrc := &chunkSource{
-		channelId:   r.file.ChannelID,
-		partId:      partId,
-		client:      r.client,
-		concurrency: r.concurrency,
-		cache:       r.cache,
-		key:         cache.KeyFileLocation(r.config.SessionInstance, r.botID, r.file.ID, partId),
-	}
-
-	var (
-		reader io.ReadCloser
-		err    error
-	)
-
-	reader, err = newTGMultiReader(r.ctx, currentRange.Start, currentRange.End, r.config, chunkSrc)
-
-	if r.file.Encrypted {
-		salt := r.parts[r.ranges[r.pos].PartNo].Salt
-		cipher, _ := crypt.NewCipher(r.config.Uploads.EncryptionKey, salt)
-		reader, err = cipher.DecryptDataSeek(r.ctx,
-			func(ctx context.Context,
-				underlyingOffset,
-				underlyingLimit int64) (io.ReadCloser, error) {
-				var end int64
-
-				if underlyingLimit >= 0 {
-					end = min(r.parts[r.ranges[r.pos].PartNo].Size-1, underlyingOffset+underlyingLimit-1)
-				}
-
-				return newTGMultiReader(r.ctx, underlyingOffset, end, r.config, chunkSrc)
-
-			}, currentRange.Start, currentRange.End-currentRange.Start+1)
-	}
-
-	return reader, err
-
 }

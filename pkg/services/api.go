@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/go-faster/errors"
+	varc "github.com/tgdrive/varc"
 	"github.com/ogen-go/ogen/ogenerrors"
 	"go.uber.org/zap"
 
@@ -26,6 +27,7 @@ import (
 type apiService struct {
 	cnf            *config.ServerCmdConfig
 	cache          cache.Cacher
+	varcCache      *varc.Cache
 	events         events.EventBroadcaster
 	authAttempts   *authAttemptManager
 	channelManager ChannelManager
@@ -80,6 +82,7 @@ func NewApiService(repo *repositories.Repositories,
 	channelManager ChannelManager,
 	cnf *config.ServerCmdConfig,
 	cache cache.Cacher,
+	varcCache *varc.Cache,
 	telegram TelegramService,
 	events events.EventBroadcaster,
 	workerStore *worker.Store) *apiService {
@@ -88,6 +91,7 @@ func NewApiService(repo *repositories.Repositories,
 		repo:           repo,
 		cnf:            cnf,
 		cache:          cache,
+		varcCache:      varcCache,
 		events:         events,
 		authAttempts:   newAuthAttemptManager(),
 		channelManager: channelManager,
