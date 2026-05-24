@@ -18,4 +18,5 @@ type Events struct {
 	UserID    int64
 	Source    *string
 	CreatedAt time.Time
+	Seq       int64
 }

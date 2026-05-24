@@ -280,7 +280,13 @@ func (m *mockTelegramService) IsSessionPasswordNeeded(err error) bool {
 }
 func (m *mockTelegramService) IsAuthKeyUnregistered(error) bool { return false }
 
-type noopEventBroadcaster struct{}
+type noopEventBroadcaster struct {
+	replay           []dto.Event
+	replayUserID     int64
+	replayAfterSeq   int64
+	replayEventTypes []events.EventType
+	replayLimit      int
+}
 
 func newNoopEventBroadcaster() *noopEventBroadcaster { return &noopEventBroadcaster{} }
 
@@ -290,4 +296,11 @@ func (n *noopEventBroadcaster) Subscribe(int64, []events.EventType) chan dto.Eve
 
 func (n *noopEventBroadcaster) Unsubscribe(int64, chan dto.Event)           {}
 func (n *noopEventBroadcaster) Record(events.EventType, int64, *dto.Source) {}
-func (n *noopEventBroadcaster) Shutdown()                                   {}
+func (n *noopEventBroadcaster) Replay(_ context.Context, userID int64, afterSeq int64, eventTypes []events.EventType, limit int) ([]dto.Event, error) {
+	n.replayUserID = userID
+	n.replayAfterSeq = afterSeq
+	n.replayEventTypes = eventTypes
+	n.replayLimit = limit
+	return n.replay, nil
+}
+func (n *noopEventBroadcaster) Shutdown() {}

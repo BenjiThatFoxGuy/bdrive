@@ -1285,11 +1285,14 @@ enum EventType {
   "files.moved",
   "files.copied",
   "uploads.progress",
-  "jobs.progress",
 }
 
 @doc("Event information")
 model Event {
+  @doc("Event stream sequence")
+  @example(123)
+  seq: int64;
+
   @doc("Event ID")
   @example("123e4567-e89b-12d3-a456-426614174000")
   id: UUID;
@@ -1320,13 +1323,17 @@ interface Events {
   @useAuth(ApiAuth)
   @doc("Real-time event stream using Server-Sent Events (SSE). Events are filtered by authenticated user. Optional interval parameter for heartbeat configuration.")
   eventsStream(
-    @doc("Event types filter. Supports repeated query params and comma-separated values. Wildcards supported: files.*, uploads.*, jobs.*")
+    @doc("Event types filter. Supports repeated query params and comma-separated values. Wildcards supported: files.*, uploads.*")
     @query
     types?: string[],
 
     @doc("Heartbeat interval in milliseconds (default: 30000)")
     @query
     interval?: int64,
+
+    @doc("Last received event sequence. Sent automatically by SSE clients as Last-Event-ID during reconnect.")
+    @header("Last-Event-Id")
+    lastEventId?: string,
   ): {
     @statusCode statusCode: 200;
     @header("Content-Type") contentType: "text/event-stream";

@@ -12,6 +12,7 @@ type Source struct {
 }
 
 type Event struct {
+	Seq       int64
 	ID        string
 	Type      string
 	UserID    int64

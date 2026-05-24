@@ -2,7 +2,6 @@ package events
 
 import (
 	"context"
-	"encoding/json"
 	"sync"
 	"time"
 
@@ -22,25 +21,24 @@ const (
 	OpMove           EventType = api.EventTypeFilesMoved
 	OpCopy           EventType = api.EventTypeFilesCopied
 	OpUploadProgress EventType = api.EventTypeUploadsProgress
-	OpJobProgress    EventType = api.EventTypeJobsProgress
 )
 
 const (
-	// Redis channel name for events
-	redisChannel = "teldrive:events"
-	// Reconnect delay
-	reconnectDelay = 5 * time.Second
-	// Default values (used if not configured)
-	defaultDBWorkers        = 10
-	defaultDBBufferSize     = 1000
-	defaultDeduplicationTTL = 30 * time.Minute
+	eventsChannel             = "teldrive_events"
+	defaultDBWorkers          = 10
+	defaultDBBufferSize       = 1000
+	defaultDeduplicationTTL   = 30 * time.Minute
+	defaultSubscriberBufSize  = 100
+	defaultEventReplayLimit   = 1000
+	defaultEventPollInterval  = 10 * time.Second
+	defaultListenerRetryDelay = 5 * time.Second
 )
 
-// EventBroadcaster defines the interface for event broadcasting
 type EventBroadcaster interface {
 	Subscribe(userID int64, eventTypes []EventType) chan dto.Event
 	Unsubscribe(userID int64, ch chan dto.Event)
 	Record(eventType EventType, userID int64, source *dto.Source)
+	Replay(ctx context.Context, userID int64, afterSeq int64, eventTypes []EventType, limit int) ([]dto.Event, error)
 	Shutdown()
 }
 
@@ -49,14 +47,12 @@ type eventSubscriber struct {
 	filters map[EventType]struct{}
 }
 
-// BroadcasterConfig holds configuration for event broadcasting
 type BroadcasterConfig struct {
 	DBWorkers        int
 	DBBufferSize     int
 	DeduplicationTTL time.Duration
 }
 
-// DefaultBroadcasterConfig returns default configuration
 func DefaultBroadcasterConfig() BroadcasterConfig {
 	return BroadcasterConfig{
 		DBWorkers:        defaultDBWorkers,
@@ -65,7 +61,6 @@ func DefaultBroadcasterConfig() BroadcasterConfig {
 	}
 }
 
-// baseBroadcaster contains shared functionality
 type baseBroadcaster struct {
 	eventsRepo   repositories.EventRepository
 	logger       *zap.Logger
@@ -74,15 +69,12 @@ type baseBroadcaster struct {
 	subscribers  map[int64][]eventSubscriber
 	subMu        sync.RWMutex
 	wg           sync.WaitGroup
-	dbWorkerCh   chan dto.Event
-	recentEvents map[string]time.Time // Event ID -> timestamp for deduplication
+	recentEvents map[string]time.Time
 	eventMu      sync.RWMutex
 	config       BroadcasterConfig
 }
 
-// newBaseBroadcaster creates a new base broadcaster with DB worker pool
 func newBaseBroadcaster(eventsRepo repositories.EventRepository, logger *zap.Logger, ctx context.Context, cancel context.CancelFunc, config BroadcasterConfig) *baseBroadcaster {
-	// Apply defaults if not set
 	if config.DBWorkers <= 0 {
 		config.DBWorkers = defaultDBWorkers
 	}
@@ -99,71 +91,52 @@ func newBaseBroadcaster(eventsRepo repositories.EventRepository, logger *zap.Log
 		ctx:          ctx,
 		cancel:       cancel,
 		subscribers:  make(map[int64][]eventSubscriber),
-		dbWorkerCh:   make(chan dto.Event, config.DBBufferSize),
 		recentEvents: make(map[string]time.Time),
 		config:       config,
 	}
-
-	// Start DB worker pool
-	for i := 0; i < config.DBWorkers; i++ {
-		b.wg.Add(1)
-		go b.dbWorker()
-	}
+	b.startDedupCleanup()
 
 	return b
 }
 
-// dbWorker processes events from the queue and saves to DB
-func (b *baseBroadcaster) dbWorker() {
-	defer b.wg.Done()
-	for {
-		select {
-		case <-b.ctx.Done():
-			return
-		case evt := <-b.dbWorkerCh:
-			eventModel, err := eventToModel(evt)
-			if err != nil {
-				b.logger.Error("events.model_mapping_failed", zap.Error(err))
-				continue
-			}
-
-			if err := b.eventsRepo.Create(b.ctx, eventModel); err != nil {
-				b.logger.Error("events.db_save_failed",
-					zap.Error(err),
-					zap.String("id", evt.ID),
-					zap.String("type", evt.Type),
-					zap.Int64("user_id", evt.UserID))
+func (b *baseBroadcaster) startDedupCleanup() {
+	interval := b.config.DeduplicationTTL
+	if interval > time.Minute {
+		interval = time.Minute
+	}
+	b.wg.Add(1)
+	go func() {
+		defer b.wg.Done()
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-b.ctx.Done():
+				return
+			case <-ticker.C:
+				b.eventMu.Lock()
+				b.cleanupOldEvents()
+				b.eventMu.Unlock()
 			}
 		}
-	}
+	}()
 }
 
-// shouldProcess checks if event should be processed (deduplication)
 func (b *baseBroadcaster) shouldProcess(eventID string) bool {
 	b.eventMu.Lock()
 	defer b.eventMu.Unlock()
 
-	// Check if recently processed
 	if ts, ok := b.recentEvents[eventID]; ok {
 		if time.Since(ts) < b.config.DeduplicationTTL {
-			return false // Duplicate
+			return false
 		}
-		// Expired, remove old entry
 		delete(b.recentEvents, eventID)
 	}
 
-	// Mark as processed
 	b.recentEvents[eventID] = time.Now()
-
-	// Cleanup old entries periodically (every 100 inserts, but skip if empty)
-	if len(b.recentEvents) > 0 && len(b.recentEvents)%100 == 0 {
-		b.cleanupOldEvents()
-	}
-
 	return true
 }
 
-// cleanupOldEvents removes expired entries from deduplication map
 func (b *baseBroadcaster) cleanupOldEvents() {
 	now := time.Now()
 	for id, ts := range b.recentEvents {
@@ -173,7 +146,6 @@ func (b *baseBroadcaster) cleanupOldEvents() {
 	}
 }
 
-// broadcast sends event to all local subscribers of a user
 func (b *baseBroadcaster) broadcast(evt dto.Event) {
 	b.subMu.RLock()
 	subs, ok := b.subscribers[evt.UserID]
@@ -183,7 +155,6 @@ func (b *baseBroadcaster) broadcast(evt dto.Event) {
 		return
 	}
 
-	sent := 0
 	eventType := EventType(evt.Type)
 	for i, sub := range subs {
 		if len(sub.filters) > 0 {
@@ -194,18 +165,17 @@ func (b *baseBroadcaster) broadcast(evt dto.Event) {
 
 		select {
 		case sub.ch <- evt:
-			sent++
 		default:
 			b.logger.Debug("events.channel_full",
 				zap.String("id", evt.ID),
+				zap.Int64("seq", evt.Seq),
 				zap.Int("subscriber_index", i))
 		}
 	}
 }
 
-// Subscribe creates a new subscription for a user
 func (b *baseBroadcaster) Subscribe(userID int64, eventTypes []EventType) chan dto.Event {
-	ch := make(chan dto.Event, 100)
+	ch := make(chan dto.Event, defaultSubscriberBufSize)
 	filters := make(map[EventType]struct{}, len(eventTypes))
 	for _, eventType := range eventTypes {
 		filters[eventType] = struct{}{}
@@ -213,16 +183,14 @@ func (b *baseBroadcaster) Subscribe(userID int64, eventTypes []EventType) chan d
 
 	b.subMu.Lock()
 	b.subscribers[userID] = append(b.subscribers[userID], eventSubscriber{ch: ch, filters: filters})
+	userSubs := len(b.subscribers[userID])
 	b.subMu.Unlock()
 
-	b.logger.Debug("events.subscribed",
-		zap.Int64("user_id", userID),
-		zap.Int("total_subs", len(b.subscribers[userID])))
+	b.logger.Debug("events.subscribed", zap.Int64("user_id", userID), zap.Int("user_subs", userSubs))
 
 	return ch
 }
 
-// Unsubscribe removes a subscription for a user with graceful drain
 func (b *baseBroadcaster) Unsubscribe(userID int64, ch chan dto.Event) {
 	b.subMu.Lock()
 
@@ -240,13 +208,11 @@ func (b *baseBroadcaster) Unsubscribe(userID int64, ch chan dto.Event) {
 
 	b.subMu.Unlock()
 
-	// Graceful drain - consume remaining events before closing
 	go func() {
 		timeout := time.After(100 * time.Millisecond)
 		for {
 			select {
 			case <-ch:
-				// Drain
 			case <-timeout:
 				close(ch)
 				return
@@ -254,26 +220,9 @@ func (b *baseBroadcaster) Unsubscribe(userID int64, ch chan dto.Event) {
 		}
 	}()
 
-	b.logger.Debug("events.unsubscribed",
-		zap.Int64("user_id", userID))
+	b.logger.Debug("events.unsubscribed", zap.Int64("user_id", userID))
 }
 
-// queueForDB queues event for DB write (non-blocking)
-func (b *baseBroadcaster) queueForDB(evt dto.Event) bool {
-	select {
-	case b.dbWorkerCh <- evt:
-		return true
-	default:
-		b.logger.Warn("events.db_queue_full",
-			zap.String("id", evt.ID),
-			zap.String("type", evt.Type),
-			zap.Int64("user_id", evt.UserID),
-			zap.Int("buffer_size", b.config.DBBufferSize))
-		return false
-	}
-}
-
-// createEvent creates a new event from parameters with generated ID
 func createEvent(eventType EventType, userID int64, source *dto.Source) dto.Event {
 	return dto.Event{
 		ID:        uuid.New().String(),
@@ -282,9 +231,4 @@ func createEvent(eventType EventType, userID int64, source *dto.Source) dto.Even
 		Source:    source,
 		CreatedAt: time.Now().UTC(),
 	}
-}
-
-// marshalEvent marshals event to JSON
-func marshalEvent(evt dto.Event) ([]byte, error) {
-	return json.Marshal(evt)
 }

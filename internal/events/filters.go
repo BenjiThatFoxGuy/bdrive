@@ -14,7 +14,6 @@ var validEventTypes = map[EventType]struct{}{
 	api.EventTypeFilesMoved:      {},
 	api.EventTypeFilesCopied:     {},
 	api.EventTypeUploadsProgress: {},
-	api.EventTypeJobsProgress:    {},
 }
 
 var eventTypeGroups = map[string][]EventType{
@@ -27,9 +26,6 @@ var eventTypeGroups = map[string][]EventType{
 	},
 	"uploads.*": {
 		api.EventTypeUploadsProgress,
-	},
-	"jobs.*": {
-		api.EventTypeJobsProgress,
 	},
 }
 

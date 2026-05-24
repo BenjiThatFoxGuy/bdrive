@@ -22,6 +22,7 @@ type eventsTable struct {
 	UserID    postgres.ColumnInteger
 	Source    postgres.ColumnString
 	CreatedAt postgres.ColumnTimestamp
+	Seq       postgres.ColumnInteger
 
 	AllColumns     postgres.ColumnList
 	MutableColumns postgres.ColumnList
@@ -68,9 +69,10 @@ func newEventsTableImpl(schemaName, tableName, alias string) eventsTable {
 		UserIDColumn    = postgres.IntegerColumn("user_id")
 		SourceColumn    = postgres.StringColumn("source")
 		CreatedAtColumn = postgres.TimestampColumn("created_at")
-		allColumns      = postgres.ColumnList{IDColumn, TypeColumn, UserIDColumn, SourceColumn, CreatedAtColumn}
-		mutableColumns  = postgres.ColumnList{TypeColumn, UserIDColumn, SourceColumn, CreatedAtColumn}
-		defaultColumns  = postgres.ColumnList{IDColumn, CreatedAtColumn}
+		SeqColumn       = postgres.IntegerColumn("seq")
+		allColumns      = postgres.ColumnList{IDColumn, TypeColumn, UserIDColumn, SourceColumn, CreatedAtColumn, SeqColumn}
+		mutableColumns  = postgres.ColumnList{TypeColumn, UserIDColumn, SourceColumn, CreatedAtColumn, SeqColumn}
+		defaultColumns  = postgres.ColumnList{IDColumn, CreatedAtColumn, SeqColumn}
 	)
 
 	return eventsTable{
@@ -82,6 +84,7 @@ func newEventsTableImpl(schemaName, tableName, alias string) eventsTable {
 		UserID:    UserIDColumn,
 		Source:    SourceColumn,
 		CreatedAt: CreatedAtColumn,
+		Seq:       SeqColumn,
 
 		AllColumns:     allColumns,
 		MutableColumns: mutableColumns,

@@ -106,7 +106,7 @@ func New(ctx context.Context, cfg *config.ServerCmdConfig) (_ *App, err error) {
 
 	cacher := cache.NewCache(ctx, int(cfg.Cache.MaxSize), redisClient, log)
 	botSelector := tgc.NewBotSelector(redisClient)
-	broadcaster := events.NewBroadcaster(ctx, repos.Events, redisClient, cfg.Events.PollInterval, events.BroadcasterConfig{
+	broadcaster := events.NewBroadcaster(ctx, repos.Events, cfg.DB.DataSource, cfg.Events.PollInterval, events.BroadcasterConfig{
 		DBWorkers:        cfg.Events.DBWorkers,
 		DBBufferSize:     cfg.Events.DBBufferSize,
 		DeduplicationTTL: cfg.Events.DeduplicationTTL,
@@ -319,7 +319,7 @@ func buildServer(ctx context.Context, cfg *config.ServerCmdConfig, repos *reposi
 	mux.Use(cors.Handler(cors.Options{
 		AllowedOrigins: []string{"*"},
 		AllowedMethods: []string{"GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH", "HEAD"},
-		AllowedHeaders: []string{"Accept", "Authorization", "Content-Type", "X-Request-ID"},
+		AllowedHeaders: []string{"Accept", "Authorization", "Content-Type", "Last-Event-ID", "X-Request-ID"},
 		ExposedHeaders: []string{"X-Request-ID"},
 		MaxAge:         86400,
 	}))

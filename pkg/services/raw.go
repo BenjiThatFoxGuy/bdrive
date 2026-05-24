@@ -21,6 +21,7 @@ import (
 	"github.com/tgdrive/teldrive/internal/logging"
 	"github.com/tgdrive/teldrive/internal/md5"
 	"github.com/tgdrive/teldrive/internal/reader"
+	"github.com/tgdrive/teldrive/pkg/dto"
 	"github.com/tgdrive/teldrive/pkg/mapper"
 	"github.com/tgdrive/teldrive/pkg/repositories"
 	"github.com/tgdrive/teldrive/pkg/types"
@@ -37,7 +38,7 @@ func NewRawService(api *apiService) *rawService {
 }
 
 func (s *rawService) EventsEventsStream(ctx context.Context, params api.EventsEventsStreamParams, w http.ResponseWriter) error {
-	flusher, ok := w.(http.Flusher)
+	flusher, ok := responseFlusher(w)
 	if !ok {
 		return &apiError{err: fmt.Errorf("streaming not supported")}
 	}
@@ -56,8 +57,27 @@ func (s *rawService) EventsEventsStream(ctx context.Context, params api.EventsEv
 	w.WriteHeader(http.StatusOK)
 	eventChan := s.api.events.Subscribe(userID, eventTypes)
 	defer s.api.events.Unsubscribe(userID, eventChan)
+	lastSeq := int64(0)
+	if rawLastEventID := params.LastEventID.Or(""); rawLastEventID != "" {
+		if parsed, parseErr := strconv.ParseInt(rawLastEventID, 10, 64); parseErr == nil && parsed > 0 {
+			lastSeq = parsed
+		}
+	}
 	fmt.Fprintf(w, ": connected\n\n")
 	flusher.Flush()
+	if lastSeq > 0 {
+		replay, err := s.api.events.Replay(ctx, userID, lastSeq, eventTypes, 1000)
+		if err != nil {
+			return &apiError{err: err}
+		}
+		for _, event := range replay {
+			if err := writeSSEEvent(w, event); err != nil {
+				continue
+			}
+			lastSeq = event.Seq
+		}
+		flusher.Flush()
+	}
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
@@ -68,18 +88,53 @@ func (s *rawService) EventsEventsStream(ctx context.Context, params api.EventsEv
 			if !ok {
 				return nil
 			}
-			data := mapper.ToEventOutFromDTO(event)
-			jsonData, err := data.MarshalJSON()
-			if err != nil {
+			if event.Seq <= lastSeq {
 				continue
 			}
-			fmt.Fprintf(w, "data: %s\n\n", jsonData)
+			if err := writeSSEEvent(w, event); err != nil {
+				continue
+			}
+			lastSeq = event.Seq
 			flusher.Flush()
 		case <-ticker.C:
 			fmt.Fprintf(w, ": keepalive\n\n")
 			flusher.Flush()
 		}
 	}
+}
+
+type responseUnwrapper interface {
+	Unwrap() http.ResponseWriter
+}
+
+func responseFlusher(w http.ResponseWriter) (http.Flusher, bool) {
+	for w != nil {
+		if flusher, ok := w.(http.Flusher); ok {
+			return flusher, true
+		}
+		unwrapper, ok := w.(responseUnwrapper)
+		if !ok {
+			return nil, false
+		}
+		w = unwrapper.Unwrap()
+	}
+	return nil, false
+}
+
+func writeSSEEvent(w io.Writer, event dto.Event) error {
+	data := mapper.ToEventOutFromDTO(event)
+	jsonData, err := data.MarshalJSON()
+	if err != nil {
+		return err
+	}
+	if event.Seq > 0 {
+		fmt.Fprintf(w, "id: %d\n", event.Seq)
+	}
+	if event.Type != "" {
+		fmt.Fprintf(w, "event: %s\n", event.Type)
+	}
+	_, err = fmt.Fprintf(w, "data: %s\n\n", jsonData)
+	return err
 }
 
 func (s *rawService) FilesStream(ctx context.Context, params api.FilesStreamParams, w http.ResponseWriter) error {

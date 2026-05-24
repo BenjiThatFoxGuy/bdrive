@@ -204,10 +204,24 @@ type ShareRepository interface {
 // EventRepository defines operations for event persistence
 type EventRepository interface {
 	Create(ctx context.Context, event *model.Events) error
+	CreateReturningSeq(ctx context.Context, event *model.Events) (int64, error)
 	GetRecent(ctx context.Context, userID int64, since time.Time, limit int) ([]model.Events, error)
 	GetSince(ctx context.Context, since time.Time, limit int) ([]model.Events, error)
+	GetBySeq(ctx context.Context, seq int64) (*EventStreamItem, error)
+	GetAfterSeq(ctx context.Context, seq int64, limit int) ([]EventStreamItem, error)
+	GetAfterSeqForUser(ctx context.Context, userID int64, seq int64, eventTypes []string, limit int) ([]EventStreamItem, error)
+	MaxSeq(ctx context.Context) (int64, error)
 	DeleteOlderThan(ctx context.Context, before time.Time) (int64, error)
 	DeleteOlderThanForUser(ctx context.Context, userID int64, before time.Time) (int64, error)
+}
+
+type EventStreamItem struct {
+	Seq       int64
+	ID        uuid.UUID
+	Type      string
+	UserID    int64
+	Source    *string
+	CreatedAt time.Time
 }
 
 type PeriodicJobRepository interface {

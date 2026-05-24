@@ -6,6 +6,7 @@ import (
 	"github.com/google/uuid"
 	jetmodel "github.com/tgdrive/teldrive/internal/database/jet/gen/model"
 	"github.com/tgdrive/teldrive/pkg/dto"
+	"github.com/tgdrive/teldrive/pkg/repositories"
 )
 
 func eventToModel(evt dto.Event) (*jetmodel.Events, error) {
@@ -30,6 +31,17 @@ func eventToModel(evt dto.Event) (*jetmodel.Events, error) {
 
 func eventFromModel(evt jetmodel.Events) dto.Event {
 	return dto.Event{
+		ID:        evt.ID.String(),
+		Type:      evt.Type,
+		UserID:    evt.UserID,
+		Source:    sourceFromJSON(evt.Source),
+		CreatedAt: evt.CreatedAt,
+	}
+}
+
+func eventFromStreamItem(evt repositories.EventStreamItem) dto.Event {
+	return dto.Event{
+		Seq:       evt.Seq,
 		ID:        evt.ID.String(),
 		Type:      evt.Type,
 		UserID:    evt.UserID,

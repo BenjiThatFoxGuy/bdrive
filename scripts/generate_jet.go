@@ -29,7 +29,13 @@ func run() error {
 
 	dbURL := os.Getenv("DATABASE_URL")
 	if dbURL == "" {
-		return fmt.Errorf("DATABASE_URL environment variable is not set")
+		var cleanup func()
+		var err error
+		dbURL, cleanup, err = database.StartTestPostgres(ctx)
+		if err != nil {
+			return fmt.Errorf("DATABASE_URL is not set and test postgres could not be started: %w", err)
+		}
+		defer cleanup()
 	}
 
 	u, err := url.Parse(dbURL)
@@ -72,7 +78,7 @@ func run() error {
 		return err
 	}
 	jetGenDir := filepath.Join(rootDir, "internal", "database", "jet", "gen")
-	if err := jet.Generate(jetPool	, jetGenDir); err != nil {
+	if err := jet.Generate(jetPool, jetGenDir); err != nil {
 		return fmt.Errorf("generate jet code: %w", err)
 	}
 

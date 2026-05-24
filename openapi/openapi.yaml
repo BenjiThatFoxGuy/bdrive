@@ -316,7 +316,7 @@ paths:
         - name: types
           in: query
           required: false
-          description: 'Event types filter. Supports repeated query params and comma-separated values. Wildcards supported: files.*, uploads.*, jobs.*'
+          description: 'Event types filter. Supports repeated query params and comma-separated values. Wildcards supported: files.*, uploads.*'
           schema:
             type: array
             items:
@@ -330,6 +330,12 @@ paths:
             type: integer
             format: int64
           explode: false
+        - name: Last-Event-Id
+          in: header
+          required: false
+          description: Last received event sequence. Sent automatically by SSE clients as Last-Event-ID during reconnect.
+          schema:
+            type: string
       responses:
         '200':
           description: The request has succeeded.
@@ -2469,11 +2475,17 @@ components:
     Event:
       type: object
       required:
+        - seq
         - id
         - type
         - createdAt
         - source
       properties:
+        seq:
+          type: integer
+          format: int64
+          description: Event stream sequence
+          example: 123
         id:
           allOf:
             - $ref: '#/components/schemas/UUID'
@@ -2501,7 +2513,6 @@ components:
         - files.moved
         - files.copied
         - uploads.progress
-        - jobs.progress
       description: Event information
     File:
       type: object
