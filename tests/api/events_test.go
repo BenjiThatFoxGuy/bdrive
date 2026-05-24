@@ -1,4 +1,4 @@
-package integration_test
+package api_test
 
 import (
 	"context"
@@ -6,7 +6,7 @@ import (
 )
 
 func TestEventsAndVersionRoutes_Basic(t *testing.T) {
-	s := newSuite(t)
+	s := newHarness(t)
 	ctx := context.Background()
 	_, client, _ := loginWithClient(t, s, 7207, "user7207")
 

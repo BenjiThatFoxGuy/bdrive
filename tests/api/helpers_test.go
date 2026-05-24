@@ -1,4 +1,4 @@
-package integration_test
+package api_test
 
 import (
 	"context"
@@ -13,7 +13,7 @@ import (
 	authpkg "github.com/tgdrive/teldrive/internal/auth"
 )
 
-func loginWithClient(t *testing.T, s *suite, userID int64, username string) (*api.Client, *api.Client, string) {
+func loginWithClient(t *testing.T, s *harness, userID int64, username string) (*api.Client, *api.Client, string) {
 	t.Helper()
 
 	public := s.newClientWithToken("")
@@ -44,7 +44,7 @@ func loginWithClient(t *testing.T, s *suite, userID int64, username string) (*ap
 	return public, s.newClientWithToken(token), uuid.UUID(claims.SessionID).String()
 }
 
-func loginAndGetToken(t *testing.T, s *suite, userID int64, username string) string {
+func loginAndGetToken(t *testing.T, s *harness, userID int64, username string) string {
 	t.Helper()
 
 	public := s.newClientWithToken("")
@@ -98,4 +98,17 @@ func statusCode(err error) int {
 		}
 	}
 	return -1
+}
+
+// errorResponse extracts the full api.Error from an ogen error if available.
+// Returns nil if the error is not an *api.ErrorStatusCode.
+func errorResponse(err error) *api.Error {
+	if err == nil {
+		return nil
+	}
+	var statusErr *api.ErrorStatusCode
+	if errors.As(err, &statusErr) {
+		return &statusErr.Response
+	}
+	return nil
 }

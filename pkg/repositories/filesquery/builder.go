@@ -152,7 +152,9 @@ func (b *Builder) buildBaseConditions(q Query) []postgres.BoolExpression {
 }
 
 func (b *Builder) buildListConditions(q Query, conditions *[]postgres.BoolExpression) {
-	if q.ParentID != nil {
+	if q.ParentIsNil {
+		*conditions = append(*conditions, b.filesTable.ParentID.IS_NULL())
+	} else if q.ParentID != nil {
 		*conditions = append(*conditions, b.filesTable.ParentID.EQ(postgres.UUID(*q.ParentID)))
 	}
 }

@@ -1,4 +1,4 @@
-package integration_test
+package api_test
 
 import (
 	"context"
@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
-	"os"
 	"strconv"
 	"strings"
 	"testing"
@@ -29,6 +28,7 @@ import (
 	"github.com/tgdrive/teldrive/pkg/services"
 	"github.com/tgdrive/teldrive/pkg/types"
 	"github.com/tgdrive/teldrive/pkg/worker"
+	"github.com/tgdrive/teldrive/tests/testdb"
 	"go.uber.org/zap/zapcore"
 )
 
@@ -36,7 +36,7 @@ func init() {
 	logging.SetLevel(zapcore.FatalLevel)
 }
 
-type suite struct {
+type harness struct {
 	t       *testing.T
 	ctx     context.Context
 	cfg     *config.ServerCmdConfig
@@ -84,15 +84,12 @@ func (s testSecuritySource) SessionHashAuth(context.Context, api.OperationName) 
 	return api.SessionHashAuth{APIKey: s.shash}, nil
 }
 
-func newSuite(t *testing.T) *suite {
+func newHarness(t *testing.T) *harness {
 	t.Helper()
-
-	if os.Getenv("TEST_DATABASE_URL") == "" && os.Getenv("DATABASE_URL") == "" {
-		t.Skip("set TEST_DATABASE_URL (or DATABASE_URL). Example: postgres://teldrive_test:teldrive_test@localhost:55432/teldrive_test?sslmode=disable")
-	}
 
 	ctx := context.Background()
 	pool := database.NewTestDatabase(t, true)
+	testdb.Reset(t, pool)
 
 	t.Cleanup(func() {
 		pool.Close()
@@ -112,7 +109,7 @@ func newSuite(t *testing.T) *suite {
 	c := cache.NewMemoryCache(10 * 1024 * 1024)
 	channelManager := tgc.NewChannelManager(repos, c, &cfg.TG)
 
-	h := services.NewApiService(repos, channelManager, cfg, c, tgMock, evt, worker.NewStore(pool))
+	h := services.NewApiService(repos, channelManager, cfg, c, nil, tgMock, evt, worker.NewStore(pool))
 	sec := authpkg.NewSecurityHandler(repos.Sessions, repos.APIKeys, c, &cfg.JWT)
 	rawSrv := services.NewRawService(h)
 	srv, err := api.NewServer(h, rawSrv, sec)
@@ -127,7 +124,7 @@ func newSuite(t *testing.T) *suite {
 
 	t.Cleanup(httpSrv.Close)
 
-	s := &suite{
+	s := &harness{
 		t:       t,
 		ctx:     ctx,
 		cfg:     cfg,
@@ -140,21 +137,10 @@ func newSuite(t *testing.T) *suite {
 		httpCli: &http.Client{Transport: httpSrv.Client().Transport, Jar: jar},
 	}
 
-	s.resetDB()
-
 	return s
 }
 
-func (s *suite) resetDB() {
-	s.t.Helper()
-
-	_, err := s.pool.Exec(s.ctx, "TRUNCATE TABLE teldrive.events, teldrive.file_shares, teldrive.uploads, teldrive.files, teldrive.sessions, teldrive.bots, teldrive.channels, teldrive.users, teldrive.kv, teldrive.periodic_jobs RESTART IDENTITY CASCADE")
-	if err != nil {
-		s.t.Fatalf("truncate test tables: %v", err)
-	}
-}
-
-func (s *suite) authTokenForUser(userID int64, tgSession string) string {
+func (s *harness) authTokenForUser(userID int64, tgSession string) string {
 	s.t.Helper()
 
 	s.ensureUserExists(userID)
@@ -189,7 +175,7 @@ func (s *suite) authTokenForUser(userID int64, tgSession string) string {
 	return token
 }
 
-func (s *suite) newClientWithToken(token string) *api.Client {
+func (s *harness) newClientWithToken(token string) *api.Client {
 	s.t.Helper()
 
 	sec := testSecuritySource{}
@@ -211,7 +197,7 @@ func deterministicSessionID(userID int64, tgSession string) string {
 	return uuid.NewSHA1(uuid.NameSpaceOID, []byte(fmt.Sprintf("%d:%s", userID, tgSession))).String()
 }
 
-func (s *suite) ensureUserExists(userID int64) {
+func (s *harness) ensureUserExists(userID int64) {
 	s.t.Helper()
 
 	_, err := s.repos.Users.GetByID(s.ctx, userID)

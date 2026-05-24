@@ -746,7 +746,7 @@ func (r *JetFileRepository) buildFilesQuery(ctx context.Context, params FileQuer
 
 func (r *JetFileRepository) resolveFilesQueryParentID(ctx context.Context, params FileQueryParams, operation string) (*uuid.UUID, bool, error) {
 	if params.ParentID != "" {
-		if operation == "find" && params.ParentID == "nil" {
+		if params.ParentID == "nil" {
 			return nil, true, nil
 		}
 

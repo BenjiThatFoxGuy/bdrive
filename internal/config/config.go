@@ -21,6 +21,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 	"github.com/tgdrive/teldrive/internal/duration"
+	"github.com/tgdrive/teldrive/internal/size"
 )
 
 var (
@@ -84,10 +85,38 @@ type ServerConfig struct {
 }
 
 type CacheConfig struct {
-	MaxSize       int           `default:"10485760" description:"Maximum cache size in bytes (used for memory cache)"`
-	StreamDir     string        `default:"~/.teldrive/cache" description:"Directory for stream content disk cache"`
-	StreamMaxAge  time.Duration `default:"168h" description:"Maximum age for cached stream chunks"`
-	StreamMaxSize int64         `default:"10737418240" description:"Maximum stream cache size in bytes"`
+	MaxSize size.Size         `default:"10MB" description:"Maximum cache size in bytes (used for memory cache)"`
+	Stream  StreamCacheConfig `koanf:"stream"`
+}
+
+type StreamCacheConfig struct {
+	// Dir is the directory for stream content disk cache.
+	Dir string `default:"~/.teldrive/cache" description:"Directory for stream content disk cache"`
+
+	// MaxAge evicts entries whose AccessedAt is older than this duration.
+	MaxAge time.Duration `default:"168h" description:"Maximum age for cached stream chunks"`
+
+	// MaxSize keeps total cache data bytes under this value after pruning.
+	MaxSize size.Size `default:"50GB" description:"Maximum stream cache size in bytes"`
+
+	// ChunkSize is the Telegram download window per fetch. Larger chunks
+	// reduce round trips but increase memory per download.
+	ChunkSize size.Size `default:"32MB" description:"Telegram download chunk size in bytes"`
+
+	// ChunkStreams limits concurrent Telegram downloads across all users.
+	ChunkStreams int `default:"4" description:"Maximum concurrent Telegram downloads"`
+
+	// ReadAhead opportunistically schedules this many bytes after every
+	// read range. Useful for sequential media playback.
+	ReadAhead size.Size `default:"4MB" description:"Read-ahead bytes for sequential media playback"`
+
+	// MinFreeSpace prevents the cache from filling the disk. Prune evicts
+	// entries when free space drops below this threshold.
+	MinFreeSpace size.Size `default:"10GB" description:"Minimum free disk space in bytes"`
+
+	// PollInterval controls how often the background janitor runs.
+	// The janitor enforces max-age, max-size, and min-free-space limits.
+	PollInterval time.Duration `default:"5m" description:"Background cache cleanup interval"`
 }
 
 type RedisConfig struct {
@@ -266,6 +295,9 @@ func parseDefaultValue(t reflect.Type, defaultValue string) any {
 	if t == reflect.TypeFor[time.Duration]() {
 		return defaultValue
 	}
+	if t == reflect.TypeFor[size.Size]() {
+		return defaultValue
+	}
 
 	switch t.Kind() {
 	case reflect.Int:
@@ -434,10 +466,14 @@ func (cl *ConfigLoader) Load(cmd *cobra.Command, cfg any) error {
 					if f.Kind() != reflect.String {
 						return data, nil
 					}
-					if t != reflect.TypeFor[time.Duration]() {
-						return data, nil
+					switch t {
+					case reflect.TypeFor[time.Duration]():
+						return duration.ParseDuration(data.(string))
+					case reflect.TypeFor[size.Size]():
+						parsed, err := size.ParseSize(data.(string))
+						return size.Size(parsed), err
 					}
-					return duration.ParseDuration(data.(string))
+					return data, nil
 				},
 			),
 			Result:           cfg,
@@ -581,6 +617,10 @@ func (cl *ConfigLoader) registerStruct(flags *pflag.FlagSet, prefix string, t re
 				val, _ := duration.ParseDuration(defaultValue)
 				d := duration.Duration(val)
 				flags.Var(&d, name, description)
+			} else if field.Type == reflect.TypeFor[size.Size]() {
+				val, _ := size.ParseSize(defaultValue)
+				s := size.Size(val)
+				flags.Var(&s, name, description)
 			} else {
 				val, _ := strconv.ParseInt(defaultValue, 10, 64)
 				flags.Int64(name, val, description)

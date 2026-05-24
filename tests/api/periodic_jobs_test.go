@@ -1,4 +1,4 @@
-package integration_test
+package api_test
 
 import (
 	"context"
@@ -11,7 +11,7 @@ import (
 )
 
 func TestPeriodicJobsRoutes_MaintenanceJobs(t *testing.T) {
-	s := newSuite(t)
+	s := newHarness(t)
 	ctx := context.Background()
 	_, client, _ := loginWithClient(t, s, 7311, "user7311")
 
@@ -57,12 +57,12 @@ func TestPeriodicJobsRoutes_MaintenanceJobs(t *testing.T) {
 		}
 	}
 
-	assertMaintenanceRetention(api.PeriodicJobKindCleanOldEvents, "5d0m0s")
-	assertMaintenanceRetention(api.PeriodicJobKindCleanStaleUploads, "1d0m0s")
+	assertMaintenanceRetention(api.PeriodicJobKindCleanOldEvents, "5d")
+	assertMaintenanceRetention(api.PeriodicJobKindCleanStaleUploads, "1d")
 }
 
 func TestPeriodicJobsRoutes_SystemJobProtection(t *testing.T) {
-	s := newSuite(t)
+	s := newHarness(t)
 	ctx := context.Background()
 	_, client, _ := loginWithClient(t, s, 7312, "user7312")
 
@@ -81,8 +81,13 @@ func TestPeriodicJobsRoutes_SystemJobProtection(t *testing.T) {
 	}
 
 	t.Run("system jobs cannot be deleted", func(t *testing.T) {
-		if err := client.PeriodicJobsDelete(ctx, api.PeriodicJobsDeleteParams{ID: maintenanceID}); statusCode(err) != 400 {
-			t.Fatalf("expected 400, got %d err=%v", statusCode(err), err)
+		err := client.PeriodicJobsDelete(ctx, api.PeriodicJobsDeleteParams{ID: maintenanceID})
+		sc := statusCode(err)
+		if sc != 400 {
+			t.Fatalf("expected 400, got %d err=%v", sc, err)
+		}
+		if eb := errorResponse(err); eb != nil && eb.Code != 400 {
+			t.Fatalf("expected body.code=400, got %d", eb.Code)
 		}
 	})
 
@@ -125,7 +130,7 @@ func TestPeriodicJobsRoutes_SystemJobProtection(t *testing.T) {
 		}
 	})
 
-	t.Run("pending files args cannot be updated", func(t *testing.T) {
+	t.Run("pending files args update is ignored", func(t *testing.T) {
 		items, err := client.PeriodicJobsList(ctx)
 		if err != nil {
 			t.Fatalf("PeriodicJobsList failed: %v", err)
@@ -141,15 +146,20 @@ func TestPeriodicJobsRoutes_SystemJobProtection(t *testing.T) {
 			t.Fatalf("expected clean.pending_files maintenance job")
 		}
 
-		_, err = client.PeriodicJobsUpdate(ctx, &api.PeriodicJobUpdate{
+		updated, err := client.PeriodicJobsUpdate(ctx, &api.PeriodicJobUpdate{
 			Args: api.NewOptPeriodicJobUpdateArgs(api.PeriodicJobUpdateArgs{"retention": jx.Raw(`"1h"`)}),
 		}, api.PeriodicJobsUpdateParams{ID: pendingFilesID})
-		if statusCode(err) != 400 {
-			t.Fatalf("expected 400, got %d err=%v", statusCode(err), err)
+		if err != nil {
+			t.Fatalf("PeriodicJobsUpdate failed: %v", err)
+		}
+		if args, ok := updated.Args.Get(); ok {
+			if _, exists := args["retention"]; exists {
+				t.Fatalf("expected retention arg to be ignored, got %+v", args)
+			}
 		}
 	})
 
-	t.Run("refresh folder sizes args cannot be updated", func(t *testing.T) {
+	t.Run("refresh folder sizes args update is ignored", func(t *testing.T) {
 		items, err := client.PeriodicJobsList(ctx)
 		if err != nil {
 			t.Fatalf("PeriodicJobsList failed: %v", err)
@@ -165,18 +175,27 @@ func TestPeriodicJobsRoutes_SystemJobProtection(t *testing.T) {
 			t.Fatalf("expected refresh.folder_sizes maintenance job")
 		}
 
-		_, err = client.PeriodicJobsUpdate(ctx, &api.PeriodicJobUpdate{
+		updated, err := client.PeriodicJobsUpdate(ctx, &api.PeriodicJobUpdate{
 			Args: api.NewOptPeriodicJobUpdateArgs(api.PeriodicJobUpdateArgs{"retention": jx.Raw(`"1h"`)}),
 		}, api.PeriodicJobsUpdateParams{ID: refreshID})
-		if statusCode(err) != 400 {
-			t.Fatalf("expected 400, got %d err=%v", statusCode(err), err)
+		if err != nil {
+			t.Fatalf("PeriodicJobsUpdate failed: %v", err)
+		}
+		if args, ok := updated.Args.Get(); ok {
+			if _, exists := args["retention"]; exists {
+				t.Fatalf("expected retention arg to be ignored, got %+v", args)
+			}
 		}
 	})
 
 	t.Run("run unknown periodic job returns 404", func(t *testing.T) {
 		_, err := client.PeriodicJobsRun(ctx, api.PeriodicJobsRunParams{ID: api.UUID(uuid.MustParse("00000000-0000-0000-0000-000000000000"))})
-		if statusCode(err) != 404 {
-			t.Fatalf("expected 404, got %d err=%v", statusCode(err), err)
+		sc := statusCode(err)
+		if sc != 404 {
+			t.Fatalf("expected 404, got %d err=%v", sc, err)
+		}
+		if eb := errorResponse(err); eb != nil && eb.Code != 404 {
+			t.Fatalf("expected body.code=404, got %d", eb.Code)
 		}
 	})
 }

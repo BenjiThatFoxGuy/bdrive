@@ -136,11 +136,6 @@ tasks:
     cmds:
       - golangci-lint run
 
-  test:int:
-    desc: Run integration tests with dockerized postgres
-    cmds:
-      - ./scripts/test-integration.sh
-
   # ────────────────────────────── Release ──────────────────────────────
 
   retag:

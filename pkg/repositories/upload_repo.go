@@ -55,7 +55,7 @@ func (r *JetUploadRepository) GetByUploadIDAndRetention(ctx context.Context, upl
 		FROM(table.Uploads).
 		WHERE(
 			table.Uploads.UploadID.EQ(postgres.String(uploadID)).
-				AND(table.Uploads.CreatedAt.LT(postgres.TimestampT(threshold))),
+				AND(table.Uploads.CreatedAt.GT(postgres.TimestampT(threshold))),
 		).
 		ORDER_BY(table.Uploads.PartNo.ASC())
 

@@ -379,6 +379,7 @@ paths:
         - $ref: '#/components/parameters/FileQuery.deepSearch'
         - $ref: '#/components/parameters/FileQuery.shared'
         - $ref: '#/components/parameters/FileQuery.parentId'
+        - $ref: '#/components/parameters/FileQuery.root'
         - $ref: '#/components/parameters/FileQuery.category'
         - $ref: '#/components/parameters/FileQuery.updatedAt'
         - $ref: '#/components/parameters/FileQuery.sort'
@@ -2069,6 +2070,14 @@ components:
       schema:
         type: string
       explode: false
+    FileQuery.root:
+      name: root
+      in: query
+      required: false
+      description: Get root-level files/folders (parentId IS NULL)
+      schema:
+        type: boolean
+      explode: false
     FileQuery.searchType:
       name: searchType
       in: query
@@ -2444,10 +2453,18 @@ components:
           type: integer
           description: Error code
           example: 500
+        error:
+          type: string
+          description: Stable machine-readable error code
+          example: internal_error
         message:
           type: string
           description: Error message
           example: Internal server error occurred
+        requestId:
+          type: string
+          description: Request identifier for support and log correlation
+          example: 0193b6a4-7b6e-7bf0-a119-78efc4c2bd58
       description: Standard error response
     Event:
       type: object

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 	"time"
 
@@ -12,6 +13,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/robfig/cron/v3"
 	"github.com/tgdrive/teldrive/internal/api"
+	"github.com/tgdrive/teldrive/internal/apperr"
 	"github.com/tgdrive/teldrive/internal/auth"
 	internalduration "github.com/tgdrive/teldrive/internal/duration"
 	"github.com/tgdrive/teldrive/pkg/repositories"
@@ -221,8 +223,8 @@ func (a *apiService) ensureDefaultPeriodicJobs(ctx context.Context, userID int64
 	for _, preset := range defaultPeriodicJobPresets() {
 		row, err := a.getPeriodicJobByName(ctx, userID, preset.Name)
 		if err != nil {
-			var apiErr *apiError
-			if errors.As(err, &apiErr) && apiErr.code == 404 {
+			var appErr *apperr.Error
+			if errors.As(err, &appErr) && appErr.Status() == http.StatusNotFound {
 				_, createErr := a.insertPeriodicPreset(ctx, userID, preset)
 				if createErr != nil {
 					return createErr
@@ -398,7 +400,7 @@ func (a *apiService) getPeriodicJobByName(ctx context.Context, userID int64, nam
 	item, err := a.repo.PeriodicJobs.GetByNameAndUserID(ctx, userID, name)
 	if err != nil {
 		if errors.Is(err, repositories.ErrNotFound) {
-			return nil, &apiError{err: errors.New("periodic job not found"), code: 404}
+			return nil, &apiError{err: periodicJobNotFound(name, err)}
 		}
 		return nil, &apiError{err: err}
 	}
@@ -409,7 +411,7 @@ func (a *apiService) getPeriodicJobRow(ctx context.Context, id string, userID in
 	item, err := a.repo.PeriodicJobs.GetByIDAndUserID(ctx, uuid.MustParse(id), userID)
 	if err != nil {
 		if errors.Is(err, repositories.ErrNotFound) {
-			return nil, &apiError{err: errors.New("periodic job not found"), code: 404}
+			return nil, &apiError{err: periodicJobNotFound(id, err)}
 		}
 		return nil, &apiError{err: err}
 	}

@@ -1,4 +1,4 @@
-package integration_test
+package api_test
 
 import (
 	"bytes"
@@ -28,7 +28,7 @@ import (
 var errPasswordRequired = fmt.Errorf("PASSWORD_AUTH_NEEDED")
 
 func TestAuthRoutes_LoginSessionLogout(t *testing.T) {
-	s := newSuite(t)
+	s := newHarness(t)
 	ctx := context.Background()
 
 	public := s.newClientWithToken("")
@@ -59,7 +59,7 @@ func TestAuthRoutes_LoginSessionLogout(t *testing.T) {
 }
 
 func TestAuthRoutes_RefreshFlowCookieRotation(t *testing.T) {
-	s := newSuite(t)
+	s := newHarness(t)
 	ctx := context.Background()
 	s.ensureUserExists(7301)
 
@@ -133,7 +133,7 @@ func TestAuthRoutes_RefreshFlowCookieRotation(t *testing.T) {
 }
 
 func TestAuthRoutes_LoginCookiesSecureWhenForwardedHTTPS(t *testing.T) {
-	s := newSuite(t)
+	s := newHarness(t)
 
 	body, err := json.Marshal(&api.AuthAttemptSession{
 		Session:   "1BvXNhK1zA5P-FAKE-SESSION-7401",
@@ -174,7 +174,7 @@ func TestAuthRoutes_LoginCookiesSecureWhenForwardedHTTPS(t *testing.T) {
 }
 
 func TestAuthRoutes_RefreshAfterExpiredAccessToken(t *testing.T) {
-	s := newSuite(t)
+	s := newHarness(t)
 	ctx := context.Background()
 	const (
 		userID       int64 = 7501
@@ -218,7 +218,7 @@ func TestAuthRoutes_RefreshAfterExpiredAccessToken(t *testing.T) {
 }
 
 func TestAuthRoutes_SessionWithAPIKeyDoesNotRotateCookie(t *testing.T) {
-	s := newSuite(t)
+	s := newHarness(t)
 	ctx := context.Background()
 	_, client, _ := loginWithClient(t, s, 7701, "user7701")
 
@@ -245,7 +245,7 @@ func TestAuthRoutes_SessionWithAPIKeyDoesNotRotateCookie(t *testing.T) {
 }
 
 func TestAuthRoutes_LogoutRevokesRefreshToken(t *testing.T) {
-	s := newSuite(t)
+	s := newHarness(t)
 	ctx := context.Background()
 	const (
 		userID       int64 = 7601
@@ -283,7 +283,7 @@ func TestAuthRoutes_LogoutRevokesRefreshToken(t *testing.T) {
 }
 
 func TestAuthRoutes_AttemptFlow_QRSuccess(t *testing.T) {
-	s := newSuite(t)
+	s := newHarness(t)
 	ctx := context.Background()
 	s.tgMock.noAuthClientFn = func(ctx context.Context, _ tg.UpdateDispatcher, storage session.Storage) (services.TelegramClient, error) {
 		mem := storage.(*session.StorageMemory)
@@ -338,7 +338,7 @@ func TestAuthRoutes_AttemptFlow_QRSuccess(t *testing.T) {
 }
 
 func TestAuthRoutes_AttemptFlow_PhonePasswordSuccess(t *testing.T) {
-	s := newSuite(t)
+	s := newHarness(t)
 	ctx := context.Background()
 	s.tgMock.noAuthClientFn = func(ctx context.Context, _ tg.UpdateDispatcher, storage session.Storage) (services.TelegramClient, error) {
 		mem := storage.(*session.StorageMemory)
@@ -415,7 +415,122 @@ func TestAuthRoutes_AttemptFlow_PhonePasswordSuccess(t *testing.T) {
 	}
 }
 
-func seedSession(t *testing.T, s *suite, ctx context.Context, userID int64, sessionID, tgSession, refreshToken string) {
+func TestAuthPassword_WrongPassword(t *testing.T) {
+	s := newHarness(t)
+	ctx := context.Background()
+	s.tgMock.noAuthClientFn = func(ctx context.Context, _ tg.UpdateDispatcher, storage session.Storage) (services.TelegramClient, error) {
+		return &authFlowMockClient{
+			sendCodeFn: func(context.Context, string) (string, error) {
+				return "hash-9901", nil
+			},
+			signInFn: func(context.Context, string, string, string) (*services.TelegramUser, error) {
+				return nil, errPasswordRequired
+			},
+			passwordFn: func(ctx context.Context, password string) (*services.TelegramUser, error) {
+				return nil, fmt.Errorf("wrong password provided")
+			},
+		}, nil
+	}
+	s.tgMock.passwordAuthFn = func(err error) bool { return errors.Is(err, errPasswordRequired) }
+
+	client := s.newClientWithToken("")
+	attempt, err := client.AuthCreateAttempt(ctx, &api.AuthAttemptCreate{AuthType: api.AuthAttemptCreateAuthTypePhone, PhoneNo: api.NewOptString("+919901234567")})
+	if err != nil {
+		t.Fatalf("AuthCreateAttempt phone failed: %v", err)
+	}
+
+	if _, err := waitForAttemptState(ctx, client, attempt.ID, api.AuthAttemptStateCodeSent); err != nil {
+		t.Fatalf("waitForAttemptState code_sent: %v", err)
+	}
+
+	if err := client.AuthSignIn(ctx, &api.AuthAttemptSignIn{PhoneNo: "+919901234567", PhoneCode: "12345", PhoneCodeHash: "hash-9901"}, api.AuthSignInParams{ID: attempt.ID}); err != nil {
+		t.Fatalf("AuthSignIn failed: %v", err)
+	}
+	if _, err := waitForAttemptState(ctx, client, attempt.ID, api.AuthAttemptStatePasswordRequired); err != nil {
+		t.Fatalf("waitForAttemptState password_required: %v", err)
+	}
+
+	if err := client.AuthPassword(ctx, &api.AuthAttemptPassword{Password: "wrong"}, api.AuthPasswordParams{ID: attempt.ID}); err != nil {
+		t.Fatalf("AuthPassword failed: %v", err)
+	}
+	snapshot, err := waitForAttemptState(ctx, client, attempt.ID, api.AuthAttemptStateFailed)
+	if err != nil {
+		t.Fatalf("waitForAttemptState failed: %v", err)
+	}
+	msg, ok := snapshot.Message.Get()
+	if !ok || msg == "" {
+		t.Fatal("expected error message on failed auth attempt")
+	}
+}
+
+func TestAuthSendCode(t *testing.T) {
+	s := newHarness(t)
+	ctx := context.Background()
+	var sendCodeCalls int
+	s.tgMock.noAuthClientFn = func(ctx context.Context, _ tg.UpdateDispatcher, _ session.Storage) (services.TelegramClient, error) {
+		return &authFlowMockClient{
+			sendCodeFn: func(context.Context, string) (string, error) {
+				sendCodeCalls++
+				return fmt.Sprintf("hash-9902-call-%d", sendCodeCalls), nil
+			},
+		}, nil
+	}
+
+	client := s.newClientWithToken("")
+	attempt, err := client.AuthCreateAttempt(ctx, &api.AuthAttemptCreate{AuthType: api.AuthAttemptCreateAuthTypePhone, PhoneNo: api.NewOptString("+919902345678")})
+	if err != nil {
+		t.Fatalf("AuthCreateAttempt phone failed: %v", err)
+	}
+
+	codeSent, err := waitForAttemptState(ctx, client, attempt.ID, api.AuthAttemptStateCodeSent)
+	if err != nil {
+		t.Fatalf("waitForAttemptState code_sent (first): %v", err)
+	}
+	firstHash, ok := codeSent.PhoneCodeHash.Get()
+	if !ok || firstHash == "" {
+		t.Fatalf("expected phoneCodeHash after first send")
+	}
+	if sendCodeCalls != 1 {
+		t.Fatalf("expected sendCodeFn called once, got %d", sendCodeCalls)
+	}
+
+	if err := client.AuthSendCode(ctx, &api.AuthAttemptSendCode{PhoneNo: "+919902345678"}, api.AuthSendCodeParams{ID: attempt.ID}); err != nil {
+		t.Fatalf("AuthSendCode failed: %v", err)
+	}
+
+	codeSent2, err := waitForAttemptState(ctx, client, attempt.ID, api.AuthAttemptStateCodeSent)
+	if err != nil {
+		t.Fatalf("waitForAttemptState code_sent (second): %v", err)
+	}
+	secondHash, ok := codeSent2.PhoneCodeHash.Get()
+	if !ok || secondHash == "" {
+		t.Fatalf("expected phoneCodeHash after resend")
+	}
+	if sendCodeCalls != 2 {
+		t.Fatalf("expected sendCodeFn called twice, got %d", sendCodeCalls)
+	}
+}
+
+func TestAuthRefresh_MissingToken(t *testing.T) {
+	s := newHarness(t)
+
+	req, err := http.NewRequest(http.MethodPost, s.server.URL+"/auth/refresh", nil)
+	if err != nil {
+		t.Fatalf("new refresh request: %v", err)
+	}
+
+	resp, err := s.httpCli.Do(req)
+	if err != nil {
+		t.Fatalf("refresh request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400 for missing refresh token, got %d", resp.StatusCode)
+	}
+}
+
+func seedSession(t *testing.T, s *harness, ctx context.Context, userID int64, sessionID, tgSession, refreshToken string) {
 	t.Helper()
 	s.ensureUserExists(userID)
 	refreshHash := hashString(refreshToken)
@@ -432,7 +547,7 @@ func seedSession(t *testing.T, s *suite, ctx context.Context, userID int64, sess
 	}
 }
 
-func mustToken(t *testing.T, s *suite, userID int64, sessionID string, ttl time.Duration) string {
+func mustToken(t *testing.T, s *harness, userID int64, sessionID string, ttl time.Duration) string {
 	t.Helper()
 	now := time.Now().UTC()
 	claims := &types.JWTClaims{

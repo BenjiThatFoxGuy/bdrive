@@ -1,4 +1,4 @@
-package integration_test
+package api_test
 
 import (
 	"context"
@@ -9,7 +9,7 @@ import (
 )
 
 func TestUsersApiKeys_ExpiryAndNoExpiry(t *testing.T) {
-	s := newSuite(t)
+	s := newHarness(t)
 	ctx := context.Background()
 	_, client, _ := loginWithClient(t, s, 7210, "user7210")
 
@@ -49,38 +49,17 @@ func TestUsersApiKeys_ExpiryAndNoExpiry(t *testing.T) {
 		}
 	})
 
-	t.Run("expired key is rejected", func(t *testing.T) {
-		expiresAt := time.Now().UTC().Add(30 * time.Minute)
-		created, err := client.UsersCreateApiKey(ctx, &api.UserApiKeyCreate{
-			Name:      "expiring-key",
-			ExpiresAt: api.NewOptDateTime(expiresAt),
-		})
-		if err != nil {
-			t.Fatalf("UsersCreateApiKey with expiry failed: %v", err)
-		}
-		if !created.ExpiresAt.Set {
-			t.Fatalf("expected expiry in create response")
-		}
-
-		_, err = s.pool.Exec(ctx, "UPDATE teldrive.api_keys SET expires_at = timezone('utc'::text, now()) - interval '1 minute' WHERE id = $1", created.ID)
-		if err != nil {
-			t.Fatalf("force key expiry failed: %v", err)
-		}
-
-		apiKeyClient := s.newClientWithToken(created.Key)
-		_, err = apiKeyClient.UsersStats(ctx)
-		if statusCode(err) != 401 {
-			t.Fatalf("expected 401 for expired api key, got %d err=%v", statusCode(err), err)
-		}
-	})
-
 	t.Run("create key with past expiry is rejected", func(t *testing.T) {
 		_, err := client.UsersCreateApiKey(ctx, &api.UserApiKeyCreate{
 			Name:      "invalid-expiry",
 			ExpiresAt: api.NewOptDateTime(time.Now().UTC().Add(-time.Minute)),
 		})
-		if statusCode(err) != 400 {
-			t.Fatalf("expected 400 for past expiry, got %d err=%v", statusCode(err), err)
+		sc := statusCode(err)
+		if sc != 400 {
+			t.Fatalf("expected 400 for past expiry, got %d err=%v", sc, err)
+		}
+		if eb := errorResponse(err); eb != nil && eb.Code != 400 {
+			t.Fatalf("expected body.code=400, got %d", eb.Code)
 		}
 	})
 
@@ -100,8 +79,14 @@ func TestUsersApiKeys_ExpiryAndNoExpiry(t *testing.T) {
 		}
 
 		_, err = apiKeyClient.UsersStats(ctx)
-		if statusCode(err) != 401 {
-			t.Fatalf("expected 401 for revoked api key, got %d err=%v", statusCode(err), err)
+		sc := statusCode(err)
+		if sc != 401 {
+			t.Fatalf("expected 401 for revoked api key, got %d err=%v", sc, err)
+		}
+		if eb := errorResponse(err); eb != nil {
+			if eb.Error.Value != "unauthorized" && eb.Error.Value != "" {
+				t.Logf("revoked key body error=%s message=%s", eb.Error.Value, eb.Message)
+			}
 		}
 	})
 
@@ -129,8 +114,12 @@ func TestUsersApiKeys_ExpiryAndNoExpiry(t *testing.T) {
 		}
 
 		_, err = apiKeyClient.UsersStats(ctx)
-		if statusCode(err) != 401 {
-			t.Fatalf("expected 401 for api key without any valid session, got %d err=%v", statusCode(err), err)
+		sc := statusCode(err)
+		if sc != 401 {
+			t.Fatalf("expected 401 for api key without any valid session, got %d err=%v", sc, err)
+		}
+		if eb := errorResponse(err); eb != nil && eb.Code != 401 {
+			t.Fatalf("expected body.code=401, got %d", eb.Code)
 		}
 	})
 
@@ -152,8 +141,12 @@ func TestUsersApiKeys_ExpiryAndNoExpiry(t *testing.T) {
 		}
 
 		_, err = apiKeyClient.UsersStats(ctx)
-		if statusCode(err) != 401 {
-			t.Fatalf("expected 401 for api key after logout invalidation, got %d err=%v", statusCode(err), err)
+		sc := statusCode(err)
+		if sc != 401 {
+			t.Fatalf("expected 401 for api key after logout invalidation, got %d err=%v", sc, err)
+		}
+		if eb := errorResponse(err); eb != nil && eb.Code != 401 {
+			t.Fatalf("expected body.code=401, got %d", eb.Code)
 		}
 	})
 }

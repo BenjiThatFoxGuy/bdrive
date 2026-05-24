@@ -5,20 +5,28 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+
+	"github.com/google/uuid"
 )
 
 type contextKey struct{}
 
 type state struct {
-	secure  bool
-	cookies []string
-	mu      sync.Mutex
+	secure    bool
+	requestID string
+	cookies   []string
+	mu        sync.Mutex
 }
 
 func Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		st := &state{secure: isSecureRequest(r)}
+		requestID := strings.TrimSpace(r.Header.Get("X-Request-ID"))
+		if requestID == "" {
+			requestID = uuid.NewString()
+		}
+		st := &state{secure: isSecureRequest(r), requestID: requestID}
 		ctx := context.WithValue(r.Context(), contextKey{}, st)
+		w.Header().Set("X-Request-ID", requestID)
 		next.ServeHTTP(&responseWriter{ResponseWriter: w, state: st}, r.WithContext(ctx))
 	})
 }
@@ -42,6 +50,14 @@ func AddSetCookie(ctx context.Context, cookie string) {
 	st.mu.Lock()
 	st.cookies = append(st.cookies, cookie)
 	st.mu.Unlock()
+}
+
+func RequestID(ctx context.Context) string {
+	st, ok := fromContext(ctx)
+	if !ok {
+		return ""
+	}
+	return st.requestID
 }
 
 func fromContext(ctx context.Context) (*state, bool) {

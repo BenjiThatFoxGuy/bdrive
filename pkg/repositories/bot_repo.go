@@ -42,19 +42,19 @@ func (r *JetBotRepository) GetByUserID(ctx context.Context, userID int64) ([]mod
 
 func (r *JetBotRepository) GetTokensByUserID(ctx context.Context, userID int64) ([]string, error) {
 	stmt := table.Bots.
-		SELECT(table.Bots.Token).
+		SELECT(table.Bots.AllColumns).
 		FROM(table.Bots).
 		WHERE(table.Bots.UserID.EQ(postgres.Int64(userID))).
 		ORDER_BY(table.Bots.Token.ASC())
 
-	var rows []struct{ Token string }
-	if err := r.db.query(ctx, stmt, &rows); err != nil {
+	var bots []model.Bots
+	if err := r.db.query(ctx, stmt, &bots); err != nil {
 		return nil, err
 	}
 
-	tokens := make([]string, 0, len(rows))
-	for _, row := range rows {
-		tokens = append(tokens, row.Token)
+	tokens := make([]string, 0, len(bots))
+	for _, bot := range bots {
+		tokens = append(tokens, bot.Token)
 	}
 
 	return tokens, nil

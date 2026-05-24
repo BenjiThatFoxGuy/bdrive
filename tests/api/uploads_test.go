@@ -1,4 +1,4 @@
-package integration_test
+package api_test
 
 import (
 	"bytes"
@@ -18,7 +18,7 @@ import (
 )
 
 func TestUploadFlow_HashingAndFileHashGeneration(t *testing.T) {
-	s := newSuite(t)
+	s := newHarness(t)
 	ctx := context.Background()
 
 	token := loginAndGetToken(t, s, 7101, "user7101")
@@ -115,7 +115,7 @@ func TestUploadFlow_HashingAndFileHashGeneration(t *testing.T) {
 }
 
 func TestUploadFlow_EncryptedUploadAndSalt(t *testing.T) {
-	s := newSuite(t)
+	s := newHarness(t)
 	ctx := context.Background()
 
 	s.cfg.TG.Uploads.EncryptionKey = "integration-test-encryption-key"
@@ -175,8 +175,8 @@ func TestUploadFlow_EncryptedUploadAndSalt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("UploadsPartsById failed: %v", err)
 	}
-	if len(parts) != 0 {
-		t.Fatalf("expected no parts because retention filter excludes new parts, got %d", len(parts))
+	if len(parts) != 1 {
+		t.Fatalf("expected one uploaded part, got %d", len(parts))
 	}
 
 	if err := client.UploadsDelete(ctx, api.UploadsDeleteParams{ID: "up-enc-1"}); err != nil {
@@ -192,7 +192,7 @@ func TestUploadFlow_EncryptedUploadAndSalt(t *testing.T) {
 }
 
 func TestUploadFlow_EncryptedWithoutKey(t *testing.T) {
-	s := newSuite(t)
+	s := newHarness(t)
 
 	token := loginAndGetToken(t, s, 7103, "user7103")
 	part, status, raw := uploadPartRaw(t, s, token, "up-enc-no-key", "f1.txt", 1, 910070, true, true, []byte("abc"))
@@ -202,7 +202,7 @@ func TestUploadFlow_EncryptedWithoutKey(t *testing.T) {
 	}
 }
 
-func uploadPartRaw(t *testing.T, s *suite, token string, uploadID, fileName string, partNo int, channelID int64, encrypted, hashing bool, body []byte) (api.UploadPart, int, []byte) {
+func uploadPartRaw(t *testing.T, s *harness, token string, uploadID, fileName string, partNo int, channelID int64, encrypted, hashing bool, body []byte) (api.UploadPart, int, []byte) {
 	t.Helper()
 
 	q := url.Values{}

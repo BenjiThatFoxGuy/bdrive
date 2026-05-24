@@ -116,9 +116,17 @@ model Error {
   @example(500)
   code: integer;
 
+  @doc("Stable machine-readable error code")
+  @example("internal_error")
+  error?: string;
+
   @doc("Error message")
   @example("Internal server error occurred")
   message: string;
+
+  @doc("Request identifier for support and log correlation")
+  @example("0193b6a4-7b6e-7bf0-a119-78efc4c2bd58")
+  requestId?: string;
 }
 
 @doc("User session information containing authentication and profile details")
@@ -357,6 +365,10 @@ model FileQuery {
   @doc("Parent folder ID")
   @example("123e4567-e89b-12d3-a456-426614174000")
   parentId?: UUID;
+
+  @query
+  @doc("Get root-level files/folders (parentId IS NULL)")
+  root?: boolean;
 
   @query
   @doc("File category")

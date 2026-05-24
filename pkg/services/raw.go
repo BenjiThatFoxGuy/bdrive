@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"mime"
@@ -11,7 +12,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	varc "github.com/tgdrive/varc"
 	"github.com/tgdrive/teldrive/internal/api"
 	"github.com/tgdrive/teldrive/internal/auth"
 	"github.com/tgdrive/teldrive/internal/cache"
@@ -22,7 +22,9 @@ import (
 	"github.com/tgdrive/teldrive/internal/md5"
 	"github.com/tgdrive/teldrive/internal/reader"
 	"github.com/tgdrive/teldrive/pkg/mapper"
+	"github.com/tgdrive/teldrive/pkg/repositories"
 	"github.com/tgdrive/teldrive/pkg/types"
+	varc "github.com/tgdrive/varc/varc"
 	"go.uber.org/zap"
 )
 
@@ -109,8 +111,14 @@ func (s *rawService) streamFile(ctx context.Context, w http.ResponseWriter, file
 		return s.api.repo.Files.GetByID(ctx, fileID)
 	})
 	if err != nil {
+		if errors.Is(err, repositories.ErrNotFound) {
+			return &apiError{err: fileNotFound(fileID, err)}
+		}
 		return &apiError{err: err, code: http.StatusBadRequest}
 	}
+	// Do not write headers yet. First check whether varc already has the
+	// requested byte range. If it does, we can serve directly from disk and
+	// skip BotTokens/AuthClient/BotClient entirely.
 	w.Header().Set("Accept-Ranges", "bytes")
 	contentType := defaultContentType
 	if file.MimeType != "" {
@@ -155,6 +163,40 @@ func (s *rawService) streamFile(ctx context.Context, w http.ResponseWriter, file
 		disposition = "attachment"
 	}
 	w.Header().Set("Content-Disposition", mime.FormatMediaType(disposition, map[string]string{"filename": file.Name}))
+	fingerprint := file.ID.String() + strconv.FormatInt(*file.Size, 10)
+
+	// Fast path: serve from varc without creating any Telegram client.
+	// RangeCached uses only local metadata + local data file checks.
+	if s.api.varcCache != nil {
+		cached, cacheErr := s.api.varcCache.RangeCached(
+			file.ID.String(),
+			start,
+			end+1, // RangeCached end is exclusive.
+			varc.WithFingerprint(fingerprint),
+			varc.WithStrictFingerprint(),
+		)
+		if cacheErr != nil && !errors.Is(cacheErr, varc.ErrCacheMiss) {
+			logger.Warn("stream.varc_range_check_failed", zap.Error(cacheErr))
+		}
+		if cached {
+			vr, err := s.api.varcCache.Open(ctx, file.ID.String(), *file.Size, nil,
+				varc.WithFingerprint(fingerprint),
+				varc.WithStrictFingerprint(),
+				varc.WithCacheOnly(),
+			)
+			if err != nil {
+				logger.Warn("stream.varc_cache_only_open_failed", zap.Error(err))
+			} else {
+				defer vr.Close()
+				w.WriteHeader(status)
+				_, err = io.Copy(w, io.NewSectionReader(vr, start, contentLength))
+				return err
+			}
+		}
+	}
+
+	// Slow path: only initialize Telegram when varc is disabled or the
+	// requested range is missing locally.
 	w.WriteHeader(status)
 	tokens, err := s.api.channelManager.BotTokens(ctx, session.UserID)
 	if err != nil {
@@ -203,37 +245,31 @@ func (s *rawService) streamFile(ctx context.Context, w http.ResponseWriter, file
 		}
 		fileRef := &reader.FileRef{ID: file.ID.String(), ChannelID: *file.ChannelID, Encrypted: file.Encrypted}
 
-		// Seekable reader for the full file — used directly or wrapped in varc.
-		seekReader, err := reader.NewReader(ctx, client.API(), s.api.cache, fileRef, parts, &s.api.cnf.TG, botID)
+		// Byte-addressable reader for the full file — used directly or wrapped in varc.
+		fileReader, err := reader.NewReader(ctx, client.API(), s.api.cache, fileRef, parts, &s.api.cnf.TG, botID)
 		if err != nil {
 			return err
 		}
-		defer seekReader.Close()
+		defer fileReader.Close()
 
 		if s.api.varcCache != nil {
-			vr, err := s.api.varcCache.OpenReadSeeker(ctx, seekReader,
-				varc.WithKey(file.ID.String()),
-				varc.WithFingerprint(file.ID.String()+strconv.FormatInt(*file.Size, 10)),
+			vr, err := s.api.varcCache.Open(ctx, file.ID.String(), *file.Size, fileReader,
+				varc.WithFingerprint(fingerprint),
+				varc.WithModTime(file.UpdatedAt),
+				varc.WithAttr("mime_type", contentType),
+				varc.WithAttr("file_name", file.Name),
 			)
 			if err != nil {
 				return fmt.Errorf("varc open: %w", err)
 			}
 			defer vr.Close()
 
-			// Seek to the requested byte range — varc caches the entire
-			// file but we only serve one HTTP range at a time.
-			if _, err := vr.Seek(start, io.SeekStart); err != nil {
-				return fmt.Errorf("varc seek: %w", err)
-			}
-			_, err = io.CopyN(w, vr, contentLength)
+			_, err = io.Copy(w, io.NewSectionReader(vr, start, contentLength))
 			return err
 		}
 
-		// No disk cache — seek directly and copy.
-		if _, err := seekReader.Seek(start, io.SeekStart); err != nil {
-			return fmt.Errorf("reader seek: %w", err)
-		}
-		_, err = io.CopyN(w, seekReader, contentLength)
+		// No disk cache — serve the requested HTTP range directly.
+		_, err = io.Copy(w, io.NewSectionReader(fileReader, start, contentLength))
 		return err
 	}
 	return s.api.telegram.RunWithAuth(ctx, client, token, func(ctx context.Context) error { return handleStream() })
@@ -257,5 +293,3 @@ func (s *rawService) fetchParts(ctx context.Context, client TelegramClient, file
 		return parts, nil
 	})
 }
-
-

@@ -1,4 +1,4 @@
-package integration_test
+package api_test
 
 import (
 	"bytes"
@@ -16,7 +16,7 @@ import (
 )
 
 func TestUploadsRoutes_TelegramErrorMatrix(t *testing.T) {
-	s := newSuite(t)
+	s := newHarness(t)
 	ctx := context.Background()
 	token := loginAndGetToken(t, s, 7301, "user7301")
 
@@ -106,7 +106,7 @@ func TestUploadsRoutes_TelegramErrorMatrix(t *testing.T) {
 }
 
 func TestUploadsRoutes_HashingDisabledStoresNoBlockHashes(t *testing.T) {
-	s := newSuite(t)
+	s := newHarness(t)
 	ctx := context.Background()
 	token := loginAndGetToken(t, s, 7302, "user7302")
 
@@ -132,7 +132,7 @@ func TestUploadsRoutes_HashingDisabledStoresNoBlockHashes(t *testing.T) {
 }
 
 func TestUploadsRoutes_InvalidContentType(t *testing.T) {
-	s := newSuite(t)
+	s := newHarness(t)
 	token := loginAndGetToken(t, s, 7303, "user7303")
 
 	q := url.Values{}

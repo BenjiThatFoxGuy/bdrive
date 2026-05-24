@@ -78,7 +78,7 @@ func (a *apiService) FilesCopy(ctx context.Context, req *api.FileCopy, params ap
 	file, err := a.repo.Files.GetByIDAndUser(ctx, uuid.UUID(params.ID), userId)
 	if err != nil {
 		if errors.Is(err, repositories.ErrNotFound) {
-			return nil, &apiError{err: errors.New("file not found"), code: 404}
+			return nil, &apiError{err: fileNotFound(uuid.UUID(params.ID), err)}
 		}
 		return nil, &apiError{err: err}
 	}
@@ -378,7 +378,7 @@ func (a *apiService) FilesDeleteById(ctx context.Context, params api.FilesDelete
 		return &apiError{err: err}
 	}
 	if len(deleted) == 0 {
-		return &apiError{err: repositories.ErrNotFound}
+		return &apiError{err: fileNotFound(fileID, repositories.ErrNotFound)}
 	}
 	firstFile := deleted[0]
 	fileDB.ID = firstFile.ID.String()
@@ -474,7 +474,7 @@ func (a *apiService) FilesGetById(ctx context.Context, params api.FilesGetByIdPa
 	file, err := a.repo.Files.GetByID(ctx, uuid.UUID(params.ID))
 	if err != nil {
 		if errors.Is(err, repositories.ErrNotFound) {
-			return nil, &apiError{err: errors.New("file not found"), code: 404}
+			return nil, &apiError{err: fileNotFound(uuid.UUID(params.ID), err)}
 		}
 		return nil, &apiError{err: err}
 	}
@@ -498,6 +498,9 @@ func (a *apiService) FilesList(ctx context.Context, params api.FilesListParams) 
 		Operation: string(params.Operation.Value),
 		Status:    string(params.Status.Value),
 		ParentID: func() string {
+			if params.Root.Value {
+				return "nil"
+			}
 			if !params.ParentId.IsSet() {
 				return ""
 			}
@@ -559,7 +562,7 @@ func (a *apiService) FilesStreamHead(ctx context.Context, params api.FilesStream
 	})
 	if err != nil {
 		if errors.Is(err, repositories.ErrNotFound) {
-			return nil, &apiError{err: errors.New("file not found"), code: 404}
+			return nil, &apiError{err: fileNotFound(fileID, err)}
 		}
 		return nil, &apiError{err: err}
 	}

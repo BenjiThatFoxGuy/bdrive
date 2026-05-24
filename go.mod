@@ -6,7 +6,7 @@ require (
 	github.com/Masterminds/semver/v3 v3.5.0
 	github.com/coocood/freecache v1.2.4
 	github.com/fatih/color v1.18.0
-	github.com/go-chi/chi/v5 v5.2.3
+	github.com/go-chi/chi/v5 v5.2.5
 	github.com/go-chi/cors v1.2.2
 	github.com/go-jet/jet/v2 v2.14.1-0.20260327171412-047eb9a4d2c2
 	github.com/go-playground/validator/v10 v10.30.1
@@ -30,7 +30,7 @@ require (
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/pflag v1.0.10
 	github.com/studio-b12/gowebdav v0.11.0
-	github.com/tgdrive/varc v0.0.0-00010101000000-000000000000
+	github.com/tgdrive/varc v0.0.0-20260523194303-2c9188be321f
 	github.com/vmihailenco/msgpack/v5 v5.4.1
 	github.com/zeebo/blake3 v0.2.4
 	go.etcd.io/bbolt v1.4.3
@@ -77,7 +77,7 @@ require (
 	golang.org/x/mod v0.36.0 // indirect
 	golang.org/x/tools v0.45.0 // indirect
 	gopkg.in/yaml.v2 v2.4.0 // indirect
-	modernc.org/libc v1.66.6 // indirect
+	modernc.org/sqlite v1.46.2 // indirect
 )
 
 require (
@@ -109,5 +109,3 @@ require (
 )
 
 tool github.com/ogen-go/ogen/cmd/ogen
-
-replace github.com/tgdrive/varc => ../rclone-vfs

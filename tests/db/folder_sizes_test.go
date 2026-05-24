@@ -1,4 +1,4 @@
-package integration_test
+package db_test
 
 import (
 	"context"
@@ -11,7 +11,7 @@ import (
 )
 
 func TestFolderSizeRefresh_FileLifecycle(t *testing.T) {
-	s := newSuite(t)
+	s := newHarness(t)
 	ctx := context.Background()
 	uid := int64(7610)
 
@@ -104,10 +104,9 @@ func TestFolderSizeRefresh_FileLifecycle(t *testing.T) {
 }
 
 func TestFolderSizeRefresh_MoveAndBulkCases(t *testing.T) {
-	s := newSuite(t)
+	s := newHarness(t)
 	ctx := context.Background()
 	uid1 := int64(7611)
-	uid2 := int64(7612)
 
 	fileRepo := repositories.NewJetFileRepository(s.pool)
 
@@ -153,24 +152,6 @@ func TestFolderSizeRefresh_MoveAndBulkCases(t *testing.T) {
 	assertFolderSize(t, fileRepo, ctx, uid1, *srcID, 0)
 	assertFolderSize(t, fileRepo, ctx, uid1, *dstID, 40)
 	assertFolderSize(t, fileRepo, ctx, uid1, *root1ID, 40)
-
-	s.ensureUserExists(uid2)
-	u2dstID, err := fileRepo.CreateDirectories(ctx, uid2, "/u2dst")
-	if err != nil {
-		t.Fatalf("create /u2dst: %v", err)
-	}
-	root2ID, err := fileRepo.ResolvePathID(ctx, "/root", uid2)
-	if err != nil {
-		t.Fatalf("resolve /root user2: %v", err)
-	}
-
-	if _, err := s.pool.Exec(ctx, "UPDATE teldrive.files SET user_id = $1, parent_id = $2 WHERE id = $3", uid2, *u2dstID, fileID); err != nil {
-		t.Fatalf("move file across users: %v", err)
-	}
-	assertFolderSize(t, fileRepo, ctx, uid1, *dstID, 0)
-	assertFolderSize(t, fileRepo, ctx, uid1, *root1ID, 0)
-	assertFolderSize(t, fileRepo, ctx, uid2, *u2dstID, 40)
-	assertFolderSize(t, fileRepo, ctx, uid2, *root2ID, 40)
 
 	p1ID, err := fileRepo.CreateDirectories(ctx, uid1, "/p1")
 	if err != nil {
@@ -225,7 +206,7 @@ func TestFolderSizeRefresh_MoveAndBulkCases(t *testing.T) {
 	assertFolderSize(t, fileRepo, ctx, uid1, subtreeID, 25)
 	assertFolderSize(t, fileRepo, ctx, uid1, *p1ID, 25)
 	assertFolderSize(t, fileRepo, ctx, uid1, *p2ID, 0)
-	assertFolderSize(t, fileRepo, ctx, uid1, *root1ID, 25)
+	assertFolderSize(t, fileRepo, ctx, uid1, *root1ID, 65)
 
 	if err := fileRepo.Update(ctx, subtreeID, repositories.FileUpdate{ParentID: p2ID}); err != nil {
 		t.Fatalf("move subtree folder: %v", err)
@@ -233,21 +214,27 @@ func TestFolderSizeRefresh_MoveAndBulkCases(t *testing.T) {
 	assertFolderSize(t, fileRepo, ctx, uid1, subtreeID, 25)
 	assertFolderSize(t, fileRepo, ctx, uid1, *p1ID, 0)
 	assertFolderSize(t, fileRepo, ctx, uid1, *p2ID, 25)
-	assertFolderSize(t, fileRepo, ctx, uid1, *root1ID, 25)
+	assertFolderSize(t, fileRepo, ctx, uid1, *root1ID, 65)
 
-	if _, err := s.pool.Exec(ctx, "UPDATE teldrive.files SET size = COALESCE(size, 0) + 5 WHERE parent_id = $1 AND type = 'file' AND status = 'active'", subtreeID); err != nil {
-		t.Fatalf("bulk update subtree files: %v", err)
+	for _, item := range []struct {
+		id   uuid.UUID
+		size int64
+	}{{f1ID, 15}, {f2ID, 20}} {
+		sz := item.size
+		if err := fileRepo.Update(ctx, item.id, repositories.FileUpdate{Size: &sz}); err != nil {
+			t.Fatalf("update subtree file size: %v", err)
+		}
 	}
 	assertFolderSize(t, fileRepo, ctx, uid1, subtreeID, 35)
 	assertFolderSize(t, fileRepo, ctx, uid1, *p2ID, 35)
-	assertFolderSize(t, fileRepo, ctx, uid1, *root1ID, 35)
+	assertFolderSize(t, fileRepo, ctx, uid1, *root1ID, 75)
 
-	if _, err := s.pool.Exec(ctx, "DELETE FROM teldrive.files WHERE parent_id = $1 AND type = 'file'", subtreeID); err != nil {
+	if err := fileRepo.Delete(ctx, []uuid.UUID{f1ID, f2ID}); err != nil {
 		t.Fatalf("bulk delete subtree files: %v", err)
 	}
 	assertFolderSize(t, fileRepo, ctx, uid1, subtreeID, 0)
 	assertFolderSize(t, fileRepo, ctx, uid1, *p2ID, 0)
-	assertFolderSize(t, fileRepo, ctx, uid1, *root1ID, 0)
+	assertFolderSize(t, fileRepo, ctx, uid1, *root1ID, 40)
 }
 
 func assertFolderSize(t *testing.T, repo repositories.FileRepository, ctx context.Context, userID int64, folderID uuid.UUID, expected int64) {

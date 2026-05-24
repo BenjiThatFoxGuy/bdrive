@@ -1,17 +1,20 @@
-package integration_test
+package api_test
 
 import (
 	"context"
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/tgdrive/teldrive/internal/api"
+	jetmodel "github.com/tgdrive/teldrive/internal/database/jet/gen/model"
+	"golang.org/x/crypto/bcrypt"
 )
 
 func TestSharesRoutes_Flow(t *testing.T) {
-	s := newSuite(t)
+	s := newHarness(t)
 	ctx := context.Background()
 	public, client, _ := loginWithClient(t, s, 7204, "user7204")
 	if err := client.UsersUpdateChannel(ctx, &api.ChannelUpdate{ChannelId: api.NewOptInt64(910080), ChannelName: api.NewOptString("share-default")}); err != nil {
@@ -99,22 +102,103 @@ func TestSharesRoutes_Flow(t *testing.T) {
 	}
 }
 
-func TestSharesRoutes_Validation(t *testing.T) {
-	s := newSuite(t)
+func TestSharesGetById_Expired(t *testing.T) {
+	s := newHarness(t)
 	ctx := context.Background()
-	_, _, _ = loginWithClient(t, s, 7205, "user7205")
+	_, client, _ := loginWithClient(t, s, 8403, "user8403")
+
+	if err := client.UsersUpdateChannel(ctx, &api.ChannelUpdate{ChannelId: api.NewOptInt64(910083), ChannelName: api.NewOptString("expired-test")}); err != nil {
+		t.Fatalf("UsersUpdateChannel failed: %v", err)
+	}
+
+	folder, err := client.FilesCreate(ctx, &api.File{Name: "expired-share-folder", Type: api.FileTypeFolder, Path: api.NewOptString("/")})
+	if err != nil {
+		t.Fatalf("FilesCreate folder failed: %v", err)
+	}
+
+	// Seed an expired share via DB with a past expiration time.
+	shareID := uuid.New()
+	pastTime := time.Now().UTC().Add(-1 * time.Hour)
+	if err := s.repos.Shares.Create(ctx, &jetmodel.FileShares{
+		ID:        shareID,
+		FileID:    uuid.UUID(folder.ID.Value),
+		ExpiresAt: &pastTime,
+		UserID:    8403,
+	}); err != nil {
+		t.Fatalf("seed expired share: %v", err)
+	}
+
+	_, err = client.SharesGetById(ctx, api.SharesGetByIdParams{ID: api.UUID(shareID)})
+	if statusCode(err) != 404 {
+		t.Fatalf("expected 404 for expired share, got %d err=%v", statusCode(err), err)
+	}
+}
+
+func TestSharesUnlock_Expired(t *testing.T) {
+	s := newHarness(t)
+	ctx := context.Background()
+	_, client, _ := loginWithClient(t, s, 8403, "user8403")
+
+	if err := client.UsersUpdateChannel(ctx, &api.ChannelUpdate{ChannelId: api.NewOptInt64(910083), ChannelName: api.NewOptString("expired-unlock-test")}); err != nil {
+		t.Fatalf("UsersUpdateChannel failed: %v", err)
+	}
+
+	folder, err := client.FilesCreate(ctx, &api.File{Name: "expired-unlock-folder", Type: api.FileTypeFolder, Path: api.NewOptString("/")})
+	if err != nil {
+		t.Fatalf("FilesCreate folder failed: %v", err)
+	}
+
+	// Seed an expired share with a bcrypt-hashed password via DB.
+	shareID := uuid.New()
+	pastTime := time.Now().UTC().Add(-1 * time.Hour)
+	hashed, err := bcrypt.GenerateFromPassword([]byte("x"), bcrypt.MinCost)
+	if err != nil {
+		t.Fatalf("bcrypt hash: %v", err)
+	}
+	hashedStr := string(hashed)
+	if err := s.repos.Shares.Create(ctx, &jetmodel.FileShares{
+		ID:        shareID,
+		FileID:    uuid.UUID(folder.ID.Value),
+		Password:  &hashedStr,
+		ExpiresAt: &pastTime,
+		UserID:    8403,
+	}); err != nil {
+		t.Fatalf("seed expired share: %v", err)
+	}
+
+	_, err = client.SharesUnlock(ctx, &api.ShareUnlock{Password: "x"}, api.SharesUnlockParams{ID: api.UUID(shareID)})
+	if statusCode(err) != 404 {
+		t.Fatalf("expected 404 for expired share unlock, got %d err=%v", statusCode(err), err)
+	}
+}
+
+func TestSharesRoutes_Validation(t *testing.T) {
+	s := newHarness(t)
+	ctx := context.Background()
+	token := loginAndGetToken(t, s, 7205, "user7205")
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, s.server.URL+"/shares/bad-uuid", nil)
 	if err != nil {
 		t.Fatalf("new request: %v", err)
 	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Cookie", "access_token="+token)
 	resp, err := s.httpCli.Do(req)
 	if err != nil {
 		t.Fatalf("do request: %v", err)
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != 400 {
+	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d", resp.StatusCode)
+	}
+	body := make([]byte, 4096)
+	n, _ := resp.Body.Read(body)
+	e := decodeError(t, body[:n])
+	if e.Code != 0 && e.Code != 400 {
+		t.Fatalf("expected body.code=400, got %d", e.Code)
+	}
+	if e.Code != 0 && e.RequestID == "" {
+		t.Fatal("expected body.requestId")
 	}
 
 	req, err = http.NewRequestWithContext(ctx, http.MethodPost, s.server.URL+"/shares/bad-uuid/unlock", strings.NewReader(`{"password":"x"}`))
@@ -122,12 +206,20 @@ func TestSharesRoutes_Validation(t *testing.T) {
 		t.Fatalf("new unlock request: %v", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Cookie", "access_token="+token)
 	resp, err = s.httpCli.Do(req)
 	if err != nil {
 		t.Fatalf("do unlock request: %v", err)
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != 400 {
+	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d", resp.StatusCode)
+	}
+	body2 := make([]byte, 4096)
+	n2, _ := resp.Body.Read(body2)
+	e2 := decodeError(t, body2[:n2])
+	if e2.Code != 0 && e2.Code != 400 {
+		t.Fatalf("expected body.code=400, got %d", e2.Code)
 	}
 }

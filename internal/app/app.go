@@ -15,7 +15,6 @@ import (
 	"github.com/go-chi/chi/v5"
 	chimiddleware "github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
-	varc "github.com/tgdrive/varc"
 	"github.com/tgdrive/teldrive/internal/api"
 	"github.com/tgdrive/teldrive/internal/auth"
 	"github.com/tgdrive/teldrive/internal/banner"
@@ -33,6 +32,7 @@ import (
 	"github.com/tgdrive/teldrive/pkg/services"
 	"github.com/tgdrive/teldrive/pkg/worker"
 	"github.com/tgdrive/teldrive/ui"
+	varc "github.com/tgdrive/varc/varc"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 )
@@ -104,7 +104,7 @@ func New(ctx context.Context, cfg *config.ServerCmdConfig) (_ *App, err error) {
 		})
 	}
 
-	cacher := cache.NewCache(ctx, cfg.Cache.MaxSize, redisClient, log)
+	cacher := cache.NewCache(ctx, int(cfg.Cache.MaxSize), redisClient, log)
 	botSelector := tgc.NewBotSelector(redisClient)
 	broadcaster := events.NewBroadcaster(ctx, repos.Events, redisClient, cfg.Events.PollInterval, events.BroadcasterConfig{
 		DBWorkers:        cfg.Events.DBWorkers,
@@ -115,8 +115,8 @@ func New(ctx context.Context, cfg *config.ServerCmdConfig) (_ *App, err error) {
 
 	// Stream content disk cache (varc). Expand ~ to home dir.
 	var varcCache *varc.Cache
-	if cfg.Cache.StreamDir != "" {
-		cacheDir := cfg.Cache.StreamDir
+	if cfg.Cache.Stream.Dir != "" {
+		cacheDir := cfg.Cache.Stream.Dir
 		if strings.HasPrefix(cacheDir, "~") {
 			home, err := os.UserHomeDir()
 			if err == nil {
@@ -124,9 +124,21 @@ func New(ctx context.Context, cfg *config.ServerCmdConfig) (_ *App, err error) {
 			}
 		}
 		varcCache, err = varc.New(ctx, varc.Options{
-			CacheDir:     cacheDir,
-			CacheMaxAge:  cfg.Cache.StreamMaxAge,
-			CacheMaxSize: cfg.Cache.StreamMaxSize,
+			CacheDir:          cacheDir,
+			BlockSize:         1 << 20, // 1 MiB
+			ChunkSize:         int64(cfg.Cache.Stream.ChunkSize),
+			ChunkStreams:      cfg.Cache.Stream.ChunkStreams,
+			MaxInflightBytes:  256 << 20, // 256 MiB
+			ReadAhead:         int64(cfg.Cache.Stream.ReadAhead),
+			CacheMaxAge:       cfg.Cache.Stream.MaxAge,
+			CacheMaxSize:      int64(cfg.Cache.Stream.MaxSize),
+			CacheMinFreeSpace: int64(cfg.Cache.Stream.MinFreeSpace),
+			CachePollInterval: cfg.Cache.Stream.PollInterval,
+			ReadRetryCount:    3,
+			ReadRetryDelay:    200 * time.Millisecond,
+			ShardLevel:        2,
+			CleanOnStart:      true,
+			Logger:            logging.Component("VARC").Sugar(),
 		})
 		if err != nil {
 			return nil, fmt.Errorf("varc cache: %w", err)
@@ -306,7 +318,8 @@ func buildServer(ctx context.Context, cfg *config.ServerCmdConfig, repos *reposi
 	mux.Use(cors.Handler(cors.Options{
 		AllowedOrigins: []string{"*"},
 		AllowedMethods: []string{"GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH", "HEAD"},
-		AllowedHeaders: []string{"Accept", "Authorization", "Content-Type"},
+		AllowedHeaders: []string{"Accept", "Authorization", "Content-Type", "X-Request-ID"},
+		ExposedHeaders: []string{"X-Request-ID"},
 		MaxAge:         86400,
 	}))
 	mux.Use(chimiddleware.RealIP)

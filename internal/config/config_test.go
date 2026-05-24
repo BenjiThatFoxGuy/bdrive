@@ -45,7 +45,11 @@ func TestConfigLoader_LoadDefaults(t *testing.T) {
 	assert.Equal(t, time.Hour, cfg.Server.ReadTimeout)
 	assert.Equal(t, time.Hour, cfg.Server.WriteTimeout)
 	assert.Equal(t, "info", cfg.Log.Level)
-	assert.Equal(t, 10485760, cfg.Cache.MaxSize)
+	assert.Equal(t, int64(10485760), int64(cfg.Cache.MaxSize))
+	assert.Equal(t, int64(50<<30), int64(cfg.Cache.Stream.MaxSize))
+	assert.Equal(t, int64(32<<20), int64(cfg.Cache.Stream.ChunkSize))
+	assert.Equal(t, int64(4<<20), int64(cfg.Cache.Stream.ReadAhead))
+	assert.Equal(t, int64(10<<30), int64(cfg.Cache.Stream.MinFreeSpace))
 	assert.Equal(t, true, cfg.DB.Pool.Enable)
 	assert.Equal(t, 25, cfg.DB.Pool.MaxOpenConnections)
 	assert.Equal(t, 25, cfg.DB.Pool.MaxIdleConnections)
@@ -100,7 +104,7 @@ graceful-shutdown = "20s"
 level = "debug"
 
 [cache]
-max-size = 20971520
+max-size = "20MB"
 
 [tg]
 rate = 200
@@ -127,7 +131,7 @@ rate = 200
 	assert.Equal(t, 9000, cfg.Server.Port)
 	assert.Equal(t, 20*time.Second, cfg.Server.GracefulShutdown)
 	assert.Equal(t, "debug", cfg.Log.Level)
-	assert.Equal(t, 20971520, cfg.Cache.MaxSize)
+	assert.Equal(t, int64(20<<20), int64(cfg.Cache.MaxSize))
 	assert.Equal(t, 200, cfg.TG.Rate)
 
 	// Test that other values still use defaults
@@ -161,7 +165,7 @@ func TestConfigLoader_CommandLineFlags(t *testing.T) {
 	// Set command line flags
 	require.NoError(t, cmd.Flags().Set("server-port", "9999"))
 	require.NoError(t, cmd.Flags().Set("log-level", "warn"))
-	require.NoError(t, cmd.Flags().Set("cache-max-size", "31457280"))
+	require.NoError(t, cmd.Flags().Set("cache-max-size", "30MB"))
 
 	// Load config
 	err = loader.Load(cmd, &cfg)
@@ -170,7 +174,7 @@ func TestConfigLoader_CommandLineFlags(t *testing.T) {
 	// Test that command line flags override defaults
 	assert.Equal(t, 9999, cfg.Server.Port)
 	assert.Equal(t, "warn", cfg.Log.Level)
-	assert.Equal(t, 31457280, cfg.Cache.MaxSize)
+	assert.Equal(t, int64(30<<20), int64(cfg.Cache.MaxSize))
 }
 
 func TestConfigLoader_RequiredFields(t *testing.T) {
@@ -228,7 +232,7 @@ server:
 log:
   level: "debug"
 cache:
-  max-size: 20971520
+  max-size: "20MB"
 tg:
   rate: 200
   rate-limit: false
@@ -258,7 +262,7 @@ tg:
 	assert.Equal(t, 9000, cfg.Server.Port)
 	assert.Equal(t, 20*time.Second, cfg.Server.GracefulShutdown)
 	assert.Equal(t, "debug", cfg.Log.Level)
-	assert.Equal(t, 20971520, cfg.Cache.MaxSize)
+	assert.Equal(t, int64(20<<20), int64(cfg.Cache.MaxSize))
 	assert.Equal(t, 200, cfg.TG.Rate)
 	assert.Equal(t, false, cfg.TG.RateLimit)
 	assert.Equal(t, "127.0.0.1:443", cfg.TG.MTProxy.Addr)
@@ -293,7 +297,7 @@ func TestConfigLoader_FlagDefaults(t *testing.T) {
 
 	cacheSizeFlag := cmd.Flags().Lookup("cache-max-size")
 	require.NotNil(t, cacheSizeFlag)
-	assert.Equal(t, "10485760", cacheSizeFlag.DefValue)
+	assert.Equal(t, "10MB", cacheSizeFlag.DefValue)
 
 	rateLimitFlag := cmd.Flags().Lookup("tg-rate-limit")
 	require.NotNil(t, rateLimitFlag)
@@ -462,6 +466,14 @@ func TestConfigLoader_CustomEnvMapping(t *testing.T) {
 			envVal: "50",
 			check: func(t *testing.T, c *ServerCmdConfig) {
 				assert.Equal(t, 50, c.DB.Pool.MaxOpenConnections)
+			},
+		},
+		{
+			// Deep nesting + human-readable size: cache.stream.max-size
+			envKey: "TELDRIVE_CACHE_STREAM_MAX_SIZE",
+			envVal: "5GB",
+			check: func(t *testing.T, c *ServerCmdConfig) {
+				assert.Equal(t, int64(5<<30), int64(c.Cache.Stream.MaxSize))
 			},
 		},
 	}

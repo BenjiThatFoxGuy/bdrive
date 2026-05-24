@@ -48,7 +48,7 @@ type fileShare struct {
 func (a *apiService) shareGetById(ctx context.Context, shareID uuid.UUID) (*fileShare, error) {
 	share, err := a.repo.Shares.GetByID(ctx, shareID)
 	if err != nil {
-		return nil, &apiError{err: ErrShareNotFound, code: http.StatusNotFound}
+		return nil, &apiError{err: shareNotFound(shareID, err)}
 	}
 	if share.ExpiresAt != nil && share.ExpiresAt.Before(time.Now().UTC()) {
 		return nil, &apiError{err: ErrShareExpired, code: http.StatusNotFound}
@@ -137,7 +137,10 @@ func (a *apiService) validateShareToken(token, shareID string) error {
 func (a *apiService) SharesUnlock(ctx context.Context, req *api.ShareUnlock, params api.SharesUnlockParams) (*api.SharesUnlockNoContent, error) {
 	share, err := a.repo.Shares.GetByID(ctx, uuid.UUID(params.ID))
 	if err != nil {
-		return nil, &apiError{err: ErrShareNotFound, code: http.StatusNotFound}
+		return nil, &apiError{err: shareNotFound(uuid.UUID(params.ID), err)}
+	}
+	if share.ExpiresAt != nil && share.ExpiresAt.Before(time.Now().UTC()) {
+		return nil, &apiError{err: ErrShareExpired, code: http.StatusNotFound}
 	}
 	if share.Password == nil {
 		return &api.SharesUnlockNoContent{SetCookie: setCookie(ctx, shareCookieName, "", -1)}, nil
@@ -211,7 +214,7 @@ func (a *apiService) SharesListFiles(ctx context.Context, params api.SharesListF
 		file, err := a.repo.Files.GetByID(ctx, fileID)
 		if err != nil {
 			if errors.Is(err, repositories.ErrNotFound) {
-				return nil, &apiError{err: ErrShareNotFound, code: http.StatusNotFound}
+				return nil, &apiError{err: fileNotFound(fileID, err)}
 			}
 			return nil, &apiError{err: err}
 		}
