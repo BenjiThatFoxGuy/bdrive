@@ -24,12 +24,10 @@ require (
 	github.com/knadh/koanf/v2 v2.3.0
 	github.com/ogen-go/ogen v1.20.1
 	github.com/pelletier/go-toml v1.9.5
-	github.com/pkg/sftp v1.13.7
 	github.com/redis/go-redis/v9 v9.17.2
 	github.com/robfig/cron/v3 v3.0.1
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/pflag v1.0.10
-	github.com/studio-b12/gowebdav v0.11.0
 	github.com/tgdrive/varc v0.0.0-20260523194303-2c9188be321f
 	github.com/vmihailenco/msgpack/v5 v5.4.1
 	github.com/zeebo/blake3 v0.2.4
@@ -60,7 +58,6 @@ require (
 	github.com/jackc/pgtype v1.14.4 // indirect
 	github.com/jackc/puddle/v2 v2.2.2 // indirect
 	github.com/klauspost/cpuid/v2 v2.3.0 // indirect
-	github.com/kr/fs v0.1.0 // indirect
 	github.com/leodido/go-urn v1.4.0 // indirect
 	github.com/lib/pq v1.10.9 // indirect
 	github.com/mattn/go-colorable v0.1.14 // indirect
