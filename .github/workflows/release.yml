@@ -15,7 +15,6 @@ jobs:
   goreleaser:
     runs-on: ubuntu-latest
     env:
-      PROJECT: teldrive
       GHCR_OWNER: ${{ toLower(github.repository_owner) }}
     steps:
       - name: Checkout
@@ -23,8 +22,10 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Normalize GHCR owner to lowercase
-        run: echo "GHCR_OWNER=${GITHUB_REPOSITORY_OWNER,,}" >> $GITHUB_ENV
+      - name: Normalize GHCR owner to lowercase and set PROJECT
+        run: |
+          echo "GHCR_OWNER=${GITHUB_REPOSITORY_OWNER,,}" >> $GITHUB_ENV
+          echo "PROJECT=${GITHUB_REPOSITORY##*/}" >> $GITHUB_ENV
 
       - name: Set up Go
         uses: actions/setup-go@v5

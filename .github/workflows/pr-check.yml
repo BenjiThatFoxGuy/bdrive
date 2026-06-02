@@ -15,14 +15,14 @@ jobs:
   pr-check:
     name: PR Build & Tests
     runs-on: ubuntu-latest
-    env:
-      PROJECT: teldrive
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Normalize GHCR owner to lowercase
-        run: echo "GHCR_OWNER=${GITHUB_REPOSITORY_OWNER,,}" >> $GITHUB_ENV
+      - name: Normalize GHCR owner to lowercase and set PROJECT
+        run: |
+          echo "GHCR_OWNER=${GITHUB_REPOSITORY_OWNER,,}" >> $GITHUB_ENV
+          echo "PROJECT=${GITHUB_REPOSITORY##*/}" >> $GITHUB_ENV
 
       - name: Setup Go
         uses: actions/setup-go@v4
