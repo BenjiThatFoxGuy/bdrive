@@ -16,6 +16,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       PROJECT: teldrive
+      GHCR_OWNER: ${{ toLower(github.repository_owner) }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -48,6 +49,8 @@ jobs:
           else
             TAG="${GITHUB_REF#refs/heads/}"
           fi
+          # sanitize tag (replace slashes with dashes)
+          TAG=${TAG//\//-}
           echo "image_tag=$TAG" >> "$GITHUB_OUTPUT"
 
       - name: Login to GitHub Container Registry
@@ -72,7 +75,7 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           tags: |
-            ghcr.io/tgdrive/${{ env.PROJECT }}:${{ steps.tag.outputs.image_tag }}
+            ghcr.io/${{ github.repository_owner }}/${{ env.PROJECT }}:${{ steps.tag.outputs.image_tag }}
 
       - name: Run GoReleaser (on git tag pushes)
         if: "startsWith(github.ref, 'refs/tags/')"
