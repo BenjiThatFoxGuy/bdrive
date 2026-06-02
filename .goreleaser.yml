@@ -46,7 +46,6 @@ archives:
 dockers_v2:
   - images:
       - "ghcr.io/tgdrive/{{ .ProjectName }}"
-      - "docker.io/{{ .ProjectName }}/{{ .ProjectName }}"
     tags:
       - "{{ .Tag }}"
       - "latest"
