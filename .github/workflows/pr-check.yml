@@ -21,6 +21,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Normalize GHCR owner to lowercase
+        run: |
+          echo "GHCR_OWNER=$(echo \"$GITHUB_REPOSITORY_OWNER\" | tr '[:upper:]' '[:lower:]')" >> $GITHUB_ENV
+
       - name: Setup Go
         uses: actions/setup-go@v4
         with:
@@ -91,6 +95,6 @@ jobs:
           context: .
           push: true
           tags: |
-            ghcr.io/${{ toLower(github.repository_owner) }}/${{ env.PROJECT }}:${{ steps.tag.outputs.image_tag }}
+            ghcr.io/${{ env.GHCR_OWNER }}/${{ env.PROJECT }}:${{ steps.tag.outputs.image_tag }}
           platforms: linux/amd64,linux/arm64
 

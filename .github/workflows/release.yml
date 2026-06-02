@@ -23,6 +23,10 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Normalize GHCR owner to lowercase
+        run: |
+          echo "GHCR_OWNER=$(echo \"$GITHUB_REPOSITORY_OWNER\" | tr '[:upper:]' '[:lower:]')" >> $GITHUB_ENV
+
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
@@ -75,7 +79,7 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           tags: |
-            ghcr.io/${{ github.repository_owner }}/${{ env.PROJECT }}:${{ steps.tag.outputs.image_tag }}
+            ghcr.io/${{ env.GHCR_OWNER }}/${{ env.PROJECT }}:${{ steps.tag.outputs.image_tag }}
 
       - name: Run GoReleaser (on git tag pushes)
         if: "startsWith(github.ref, 'refs/tags/')"
