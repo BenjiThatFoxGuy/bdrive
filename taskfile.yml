@@ -4,7 +4,7 @@ vars:
   APP_NAME: teldrive
   BUILD_DIR: bin
   FRONTEND_DIR: ui/dist
-  FRONTEND_ASSET: https://github.com/tgdrive/teldrive-ui/releases/download/latest/teldrive-ui.zip
+  FRONTEND_ASSET: https://github.com/BenjiThatFoxGuy/bdrive-ui/releases/download/latest/teldrive-ui.zip
   GIT_COMMIT:
     sh: git rev-parse --short HEAD
   MODULE_PATH:
