@@ -68,6 +68,19 @@ jobs:
           version: 3.x
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Generate code and UI assets
+        if: "! startsWith(github.ref, 'refs/tags/')"
+        run: |
+          task gen
+          task ui
+
+      - name: Cross-compile binaries for Docker image
+        if: "! startsWith(github.ref, 'refs/tags/')"
+        run: |
+          mkdir -p linux/amd64 linux/arm64
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o linux/amd64/teldrive .
+          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags="-s -w" -o linux/arm64/teldrive .
+
       - name: Build and push image to GHCR (branches/PRs)
         if: "! startsWith(github.ref, 'refs/tags/')"
         uses: docker/build-push-action@v5

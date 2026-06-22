@@ -60,6 +60,13 @@ jobs:
       - name: Run tests (short)
         run: go test $(go list ./... | grep -v '/tests/') -v -count=1 -short
 
+      - name: Cross-compile binaries for Docker image
+        if: ${{ github.event_name == 'pull_request' }}
+        run: |
+          mkdir -p linux/amd64 linux/arm64
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o linux/amd64/teldrive .
+          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags="-s -w" -o linux/arm64/teldrive .
+
       - name: Set up QEMU (for multi-arch builds)
         uses: docker/setup-qemu-action@v2
 
@@ -95,6 +102,7 @@ jobs:
         uses: docker/build-push-action@v5
         with:
           context: .
+          file: goreleaser.dockerfile
           push: true
           tags: |
             ghcr.io/${{ env.GHCR_OWNER }}/${{ env.PROJECT }}:${{ steps.tag.outputs.image_tag }}
