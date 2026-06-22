@@ -14,8 +14,6 @@ permissions: write-all
 jobs:
   goreleaser:
     runs-on: ubuntu-latest
-    env:
-      GHCR_OWNER: ${{ toLower(github.repository_owner) }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -61,7 +59,7 @@ jobs:
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
-          username: ${{ github.actor }}
+          username: benjithatfoxguy
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Install Task
