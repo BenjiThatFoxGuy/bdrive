@@ -6,13 +6,12 @@ import (
 )
 
 const banner = `
-  _______   _     _      _           
- |__   __| | |   | |    (_)          
-    | | ___| | __| |_ __ ___   _____ 
-    | |/ _ \ |/ _' | '__| \ \ / / _ \
-    | |  __/ | (_| | |  | |\ V /  __/
-    |_|\___|_|\__,_|_|  |_| \_/ \___|
-                                     
+ ____  ____       _
+| __ )|  _ \ _ __(_)_   _____
+|  _ \| | | | '__| \ \ / / _ \
+| |_) | |_| | |  | |\ V /  __/
+|____/|____/|_|  |_| \_/ \___|
+
 `
 
 type StartupInfo struct {
@@ -23,7 +22,7 @@ type StartupInfo struct {
 
 func PrintBanner(info StartupInfo) {
 	fmt.Print(banner)
-	fmt.Printf("                              v%s\n\n", info.Version)
+	fmt.Printf("                        v%s\n\n", info.Version)
 
 	width := 50
 	fmt.Printf("  %s\n", strings.Repeat("─", width))
