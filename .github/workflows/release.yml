@@ -1,4 +1,4 @@
-name: Goreleaser
+name: Release
 
 on:
   push:
@@ -12,15 +12,36 @@ on:
 permissions: write-all
 
 jobs:
+  setup:
+    name: Determine build matrix
+    runs-on: ubuntu-latest
+    outputs:
+      targets: ${{ steps.targets.outputs.targets }}
+      is_release: ${{ steps.targets.outputs.is_release }}
+    steps:
+      - name: Determine build matrix
+        id: targets
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            echo "is_release=true" >> "$GITHUB_OUTPUT"
+            echo 'targets=[{"goos":"linux","goarch":"amd64"},{"goos":"linux","goarch":"arm"},{"goos":"linux","goarch":"arm64"},{"goos":"windows","goarch":"amd64"},{"goos":"windows","goarch":"arm64"},{"goos":"darwin","goarch":"amd64"},{"goos":"darwin","goarch":"arm64"}]' >> "$GITHUB_OUTPUT"
+          else
+            echo "is_release=false" >> "$GITHUB_OUTPUT"
+            echo 'targets=[{"goos":"linux","goarch":"amd64"},{"goos":"linux","goarch":"arm64"}]' >> "$GITHUB_OUTPUT"
+          fi
+
   cross-compile:
-    name: Cross-compile (${{ matrix.goarch }})
+    name: Cross-compile (${{ matrix.target.goos }}/${{ matrix.target.goarch }})
+    needs: setup
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        goarch: [amd64, arm64]
+        target: ${{ fromJSON(needs.setup.outputs.targets) }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -33,7 +54,7 @@ jobs:
           path: |
             ~/.cache/go-build
             ~/go/pkg/mod
-          key: ${{ runner.os }}-go-${{ matrix.goarch }}-${{ hashFiles('**/go.sum') }}
+          key: ${{ runner.os }}-go-${{ matrix.target.goos }}-${{ matrix.target.goarch }}-${{ hashFiles('**/go.sum') }}
 
       - name: Install Task
         uses: arduino/setup-task@v2
@@ -46,16 +67,31 @@ jobs:
           task gen
           task ui
 
-      - name: Cross-compile binary for Docker image
+      - name: Determine version
+        id: version
         run: |
-          mkdir -p linux/${{ matrix.goarch }}
-          CGO_ENABLED=0 GOOS=linux GOARCH=${{ matrix.goarch }} go build -trimpath -ldflags="-s -w" -o linux/${{ matrix.goarch }}/teldrive .
+          echo "version=$(git describe --tags --always)" >> "$GITHUB_OUTPUT"
+          echo "commit=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Cross-compile binary
+        env:
+          GOOS: ${{ matrix.target.goos }}
+          GOARCH: ${{ matrix.target.goarch }}
+          CGO_ENABLED: 0
+        run: |
+          EXT=""
+          [ "$GOOS" = "windows" ] && EXT=".exe"
+          MODULE=$(go list -m)
+          mkdir -p "dist/${GOOS}-${GOARCH}"
+          go build -trimpath \
+            -ldflags="-s -w -extldflags=-static -X ${MODULE}/internal/version.Version=${{ steps.version.outputs.version }} -X ${MODULE}/internal/version.CommitSHA=${{ steps.version.outputs.commit }}" \
+            -o "dist/${GOOS}-${GOARCH}/teldrive${EXT}" .
 
       - name: Upload binary artifact
         uses: actions/upload-artifact@v4
         with:
-          name: teldrive-linux-${{ matrix.goarch }}
-          path: linux/${{ matrix.goarch }}/teldrive
+          name: binary-${{ matrix.target.goos }}-${{ matrix.target.goarch }}
+          path: dist/${{ matrix.target.goos }}-${{ matrix.target.goarch }}/teldrive*
 
   build-and-push:
     name: Build and push image
@@ -74,16 +110,16 @@ jobs:
         run: |
           sudo apt-get update && sudo apt-get install -y jq
 
-      - name: Download amd64 binary
+      - name: Download linux/amd64 binary
         uses: actions/download-artifact@v4
         with:
-          name: teldrive-linux-amd64
+          name: binary-linux-amd64
           path: linux/amd64
 
-      - name: Download arm64 binary
+      - name: Download linux/arm64 binary
         uses: actions/download-artifact@v4
         with:
-          name: teldrive-linux-arm64
+          name: binary-linux-arm64
           path: linux/arm64
 
       - name: Make binaries executable
@@ -134,9 +170,10 @@ jobs:
           push: true
           tags: ${{ steps.tag.outputs.image_tags }}
 
-  goreleaser:
-    name: Run GoReleaser (on git tag pushes)
-    if: "startsWith(github.ref, 'refs/tags/')"
+  release:
+    name: Create GitHub release
+    if: needs.setup.outputs.is_release == 'true'
+    needs: [setup, cross-compile]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -144,22 +181,45 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Set up Go
-        uses: actions/setup-go@v5
+      - name: Download all binaries
+        uses: actions/download-artifact@v4
         with:
-          go-version: stable
+          pattern: binary-*
+          path: artifacts
 
-      - name: Install Task
-        uses: arduino/setup-task@v2
-        with:
-          version: 3.x
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build archives and checksums
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          WORKSPACE="$(pwd)"
+          mkdir -p release
+          for dir in artifacts/binary-*; do
+            target=$(basename "$dir" | sed 's/^binary-//')
+            os="${target%-*}"
+            arch="${target##*-}"
+            cp README*.md LICENSE "$dir/"
+            chmod +x "$dir"/teldrive*
+            name="bdrive-${TAG}-${os}-${arch}"
+            files=$(cd "$dir" && ls)
+            if [ "$os" = "windows" ]; then
+              (cd "$dir" && zip -j "${WORKSPACE}/release/${name}.zip" $files)
+            else
+              tar -czf "release/${name}.tar.gz" -C "$dir" $files
+            fi
+          done
+          (cd release && sha256sum * > bdrive_checksums.txt)
 
-      - name: Run GoReleaser
-        uses: goreleaser/goreleaser-action@v6
+      - name: Generate changelog
+        id: cliff
+        uses: orhun/git-cliff-action@v4
         with:
-          distribution: goreleaser
-          version: latest
-          args: release --clean
+          config: cliff.toml
+          args: --latest --strip header
+        env:
+          OUTPUT: CHANGELOG.md
+
+      - name: Create GitHub release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          gh release create "$TAG" --draft --title "$TAG" --notes-file "${{ steps.cliff.outputs.changelog }}" release/*
