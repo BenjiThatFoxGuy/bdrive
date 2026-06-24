@@ -44,21 +44,8 @@ archives:
       - README*.md
       - LICENSE
 
-dockers_v2:
-  - images:
-      - "ghcr.io/{{ .Env.GHCR_OWNER }}/{{ .ProjectName }}"
-    tags:
-      - "{{ .Tag }}"
-      - "latest"
-    dockerfile: goreleaser.dockerfile
-    platforms:
-      - linux/amd64
-      - linux/arm64
-    labels:
-      "org.opencontainers.image.created": "{{.Date}}"
-      "org.opencontainers.image.title": "{{.ProjectName}}"
-      "org.opencontainers.image.revision": "{{.FullCommit}}"
-      "org.opencontainers.image.version": "{{.Version}}"
+# The Docker image is built and pushed by the cross-compile/build-and-push
+# jobs in release.yml (parallel amd64/arm64 matrix), not by goreleaser.
 
 changelog:
   use: github
