@@ -1,6 +1,6 @@
-# Contributing to TelDrive
+# Contributing to BDrive
 
-This guide will help you get started with contributing to TelDrive.
+This guide will help you get started with contributing to BDrive.
 
 ## Development Setup
 
@@ -36,7 +36,7 @@ cd teldrive
 task deps
 ```
 
-## Building TelDrive
+## Building BDrive
 
 ### Complete Build
 To build both frontend and backend:
@@ -58,7 +58,7 @@ To build the backend only:
 task server
 ```
 
-### Running TelDrive
+### Running BDrive
 After building, run the application:
 ```bash
 task run

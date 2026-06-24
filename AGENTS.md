@@ -1,6 +1,6 @@
-# TelDrive Agent Guidelines
+# BDrive Agent Guidelines
 
-This file contains instructions for agentic coding agents working on the TelDrive codebase.
+This file contains instructions for agentic coding agents working on the BDrive codebase.
 
 ## 1. Build, Lint, and Test Commands
 

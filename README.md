@@ -1,16 +1,16 @@
-# Teldrive
+# BDrive
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/tgdrive/teldrive)
 
-Teldrive is a powerful utility that enables you to organise your telegram files and much more.
+BDrive is a powerful utility that enables you to organise your telegram files and much more.
 
 ## Advantages Over Alternative Solutions
 
-- **Exceptional Speed:** Teldrive stands out among similar tools, thanks to its implementation in Go, a language known for its efficiency. Its performance surpasses alternatives written in Python and other languages, with the exception of Rust.
+- **Exceptional Speed:** BDrive stands out among similar tools, thanks to its implementation in Go, a language known for its efficiency. Its performance surpasses alternatives written in Python and other languages, with the exception of Rust.
 
-- **Enhanced Management Capabilities:** Teldrive not only excels in speed but also offers an intuitive user interface for efficient file interaction which other tool lacks. Its compatibility with Rclone further enhances file management.
+- **Enhanced Management Capabilities:** BDrive not only excels in speed but also offers an intuitive user interface for efficient file interaction which other tool lacks. Its compatibility with Rclone further enhances file management.
 
 > [!IMPORTANT]
-> Teldrive functions as a wrapper over your Telegram account, simplifying file access. However, users must adhere to the limitations imposed by the Telegram API. Teldrive is not responsible for any consequences arising from non-compliance with these API limits.You will be banned instantly if you misuse telegram API.
+> BDrive functions as a wrapper over your Telegram account, simplifying file access. However, users must adhere to the limitations imposed by the Telegram API. BDrive is not responsible for any consequences arising from non-compliance with these API limits.You will be banned instantly if you misuse telegram API.
 
 Visit https://teldrive-docs.pages.dev for setting up teldrive.
 
@@ -18,7 +18,7 @@ Visit https://teldrive-docs.pages.dev for setting up teldrive.
 
 <a href="https://trendshift.io/repositories/7568" target="_blank"><img src="https://trendshift.io/api/badge/repositories/7568" alt="divyam234%2Fteldrive | Trendshift" style="width: 250px; height: 55px;" width="250" height="55"/></a>
 
-## Best Practices for Using Teldrive
+## Best Practices for Using BDrive
 
 ### Dos:
 

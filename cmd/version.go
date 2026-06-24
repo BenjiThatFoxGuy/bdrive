@@ -11,7 +11,7 @@ func NewVersion() *cobra.Command {
 		Short: "Check the version info",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			v := version.GetVersionInfo()
-			cmd.Printf("teldrive %s\n", v.Version)
+			cmd.Printf("BDrive %s\n", v.Version)
 			cmd.Printf("- commit: %s\n", v.CommitSHA)
 			cmd.Printf("- os/type: %s\n", v.Os)
 			cmd.Printf("- os/arch: %s\n", v.Arch)

@@ -7,7 +7,7 @@ import (
 func New() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "teldrive",
-		Short: "Teldrive",
+		Short: "BDrive",
 		Run: func(cmd *cobra.Command, args []string) {
 			cmd.Help()
 		},
