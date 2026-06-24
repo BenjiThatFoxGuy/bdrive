@@ -12,7 +12,7 @@ BDrive is a powerful utility that enables you to organise your telegram files an
 > [!IMPORTANT]
 > BDrive functions as a wrapper over your Telegram account, simplifying file access. However, users must adhere to the limitations imposed by the Telegram API. BDrive is not responsible for any consequences arising from non-compliance with these API limits.You will be banned instantly if you misuse telegram API.
 
-Visit https://teldrive-docs.pages.dev for setting up teldrive.
+Visit https://teldrive-docs.pages.dev for setting up BDrive.
 
 # Recognitions
 
