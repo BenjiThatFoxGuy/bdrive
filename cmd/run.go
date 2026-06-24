@@ -43,7 +43,7 @@ func NewRun() *cobra.Command {
 	loader := config.NewConfigLoader()
 	cmd := &cobra.Command{
 		Use:   "run",
-		Short: "Start Teldrive Server",
+		Short: "Start BDrive Server",
 		Run: func(cmd *cobra.Command, args []string) {
 			runApplication(cmd.Context(), &cfg)
 

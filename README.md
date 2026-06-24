@@ -1,3 +1,11 @@
+> ⚠️ **Unofficial Fork Disclaimer**
+> This is an **unofficial fork** of [Teldrive](https://github.com/tgdrive/teldrive), rebranded as BDrive.
+> I am **not affiliated with the upstream maintainers**, and this fork **does not intend to be malicious or harmful** in any way.
+> Please **read the source code** if you're unsure or want to verify that it behaves as described.
+> Contributions, feedback, and scrutiny are welcome.
+
+---
+
 # BDrive
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/tgdrive/teldrive)
 

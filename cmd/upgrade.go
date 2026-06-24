@@ -107,8 +107,8 @@ func checkVersion() error {
 func NewUpdateCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "upgrade",
-		Short: "Upgrade TelDrive",
-		Long:  "Upgrade TelDrive to the latest version.",
+		Short: "Upgrade BDrive",
+		Long:  "Upgrade BDrive to the latest version.",
 		Run: func(cmd *cobra.Command, args []string) {
 			var executor scriptExecutor
 
@@ -141,7 +141,7 @@ func NewUpdateCmd() *cobra.Command {
 					os.Exit(1)
 				}
 			} else {
-				fmt.Println("Restart TelDrive to use the new version.")
+				fmt.Println("Restart BDrive to use the new version.")
 			}
 		},
 	}
