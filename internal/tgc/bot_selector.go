@@ -57,7 +57,7 @@ func (s *MemoryBotSelector) Next(ctx context.Context, op BotOp, userID int64, bo
 }
 
 // RedisBotSelector provides Redis-backed round-robin bot selection.
-// This enables coordinated bot selection across multiple TelDrive instances.
+// This enables coordinated bot selection across multiple BDrive instances.
 type RedisBotSelector struct {
 	client *redis.Client
 }
