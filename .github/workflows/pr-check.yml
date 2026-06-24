@@ -44,7 +44,7 @@ jobs:
         run: go mod download
 
       - name: Download UI assets
-        run: go run scripts/extract.go -url https://github.com/tgdrive/teldrive-ui/releases/download/latest/teldrive-ui.zip -output ui/dist
+        run: go run scripts/extract.go -url https://github.com/BenjiThatFoxGuy/bdrive-ui/releases/download/latest/teldrive-ui.zip -output ui/dist
 
       - name: Ensure UI assets exist
         id: ui-check
