@@ -19,11 +19,6 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Normalize GHCR owner to lowercase and set PROJECT
-        run: |
-          echo "GHCR_OWNER=${GITHUB_REPOSITORY_OWNER,,}" >> $GITHUB_ENV
-          echo "PROJECT=${GITHUB_REPOSITORY##*/}" >> $GITHUB_ENV
-
       - name: Setup Go
         uses: actions/setup-go@v4
         with:
@@ -60,15 +55,79 @@ jobs:
       - name: Run tests (short)
         run: go test $(go list ./... | grep -v '/tests/') -v -count=1 -short
 
-      - name: Cross-compile binaries for Docker image
-        if: ${{ github.event_name == 'pull_request' }}
-        run: |
-          mkdir -p linux/amd64 linux/arm64
-          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o linux/amd64/teldrive .
-          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags="-s -w" -o linux/arm64/teldrive .
+  cross-compile:
+    name: Cross-compile (${{ matrix.goarch }})
+    if: ${{ github.event_name == 'pull_request' }}
+    needs: pr-check
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        goarch: [amd64, arm64]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      - name: Set up QEMU (for multi-arch builds)
-        uses: docker/setup-qemu-action@v2
+      - name: Setup Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: '1.26'
+
+      - name: Cache Go modules
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: ${{ runner.os }}-go-${{ matrix.goarch }}-${{ hashFiles('**/go.sum') }}
+
+      - name: Run go generate
+        run: go generate ./...
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Download UI assets
+        run: go run scripts/extract.go -url https://github.com/BenjiThatFoxGuy/bdrive-ui/releases/download/latest/teldrive-ui.zip -output ui/dist
+
+      - name: Cross-compile binary for Docker image
+        run: |
+          mkdir -p linux/${{ matrix.goarch }}
+          CGO_ENABLED=0 GOOS=linux GOARCH=${{ matrix.goarch }} go build -trimpath -ldflags="-s -w" -o linux/${{ matrix.goarch }}/teldrive .
+
+      - name: Upload binary artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: teldrive-linux-${{ matrix.goarch }}
+          path: linux/${{ matrix.goarch }}/teldrive
+
+  build-and-push:
+    name: Build and push image (PRs)
+    if: ${{ github.event_name == 'pull_request' }}
+    needs: cross-compile
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Normalize GHCR owner to lowercase and set PROJECT
+        run: |
+          echo "GHCR_OWNER=${GITHUB_REPOSITORY_OWNER,,}" >> $GITHUB_ENV
+          echo "PROJECT=${GITHUB_REPOSITORY##*/}" >> $GITHUB_ENV
+
+      - name: Download amd64 binary
+        uses: actions/download-artifact@v4
+        with:
+          name: teldrive-linux-amd64
+          path: linux/amd64
+
+      - name: Download arm64 binary
+        uses: actions/download-artifact@v4
+        with:
+          name: teldrive-linux-arm64
+          path: linux/arm64
+
+      - name: Make binaries executable
+        run: chmod +x linux/amd64/teldrive linux/arm64/teldrive
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -98,7 +157,6 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build and push image to GHCR (PRs)
-        if: ${{ github.event_name == 'pull_request' }}
         uses: docker/build-push-action@v5
         with:
           context: .
@@ -107,4 +165,3 @@ jobs:
           tags: |
             ghcr.io/${{ env.GHCR_OWNER }}/${{ env.PROJECT }}:${{ steps.tag.outputs.image_tag }}
           platforms: linux/amd64,linux/arm64
-
