@@ -1,5 +1,5 @@
 version: 2
-project_name: teldrive
+project_name: bdrive
 env:
   - GO111MODULE=on
 
@@ -9,7 +9,8 @@ before:
     - task gen
 
 builds:
-  - env:
+  - binary: teldrive
+    env:
       - CGO_ENABLED=0
     main: main.go
     flags: -trimpath

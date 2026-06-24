@@ -35,3 +35,6 @@ docs/dist
 teldrive-ui.zip
 internal/api
 .opencode/plans
+
+# GoReleaser build output
+/dist
