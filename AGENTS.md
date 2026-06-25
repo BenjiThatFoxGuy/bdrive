@@ -80,3 +80,8 @@ The project uses `task` (taskfile.yml) for build automation and standard Go tool
 2.  **Generate:** Run `task gen` if modifying API definitions or generated code.
 3.  **Test:** Write unit tests for new logic, especially in `internal/` packages.
 4.  **Lint:** Run linter before committing.
+
+## 4. Documentation Upkeep After User-Facing Changes
+Whenever a change fixes a bug, ships a feature, or alters behavior a user would notice (backend in this repo, or frontend in `bdrive-ui`):
+- **README:** Update this repo's `README.md` "Improvements Over Upstream Teldrive" section so it stays an accurate, current list of what this fork changed relative to `tgdrive/teldrive`. Add an entry for new changes; correct or remove entries that no longer apply.
+- **bdrive-docs:** Check whether `bdrive-docs` content (setup guides, feature docs, etc.) needs a matching update. Editing markdown/content there is in scope for this workflow. Building or deploying `bdrive-docs` is not — that is handled by a separate session with deploy credentials, so leave build/deploy/push steps to them unless explicitly told otherwise.
