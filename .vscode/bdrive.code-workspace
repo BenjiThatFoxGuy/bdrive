@@ -1,0 +1,14 @@
+{
+	"folders": [
+		{
+			"path": ".."
+		},
+		{
+			"path": "../../bdrive-ui"
+		},
+		{
+			"path": "../../bdrive-docs"
+		}
+	],
+	"settings": {}
+}
