@@ -22,12 +22,13 @@ type fileQueryBuilder struct {
 
 type fileResponse struct {
 	models.File
+	Path  string
 	Total int
 }
 
 const folderCategory = "folder"
 
-var selectedFields = []string{"id", "name", "type", "mime_type", "category", "hash", "channel_id", "encrypted", "size", "parent_id", "updated_at"}
+var selectedFields = []string{"id", "name", "type", "mime_type", "category", "hash", "channel_id", "encrypted", "size", "parent_id", "updated_at", "teldrive.get_path_from_file_id(id) as path"}
 
 func (afb *fileQueryBuilder) execute(filesQuery *api.FilesListParams, userId int64) (*api.FileList, error) {
 	query := afb.db.Where("user_id = ?", userId).Where("status = ?", filesQuery.Status.Value)
@@ -56,7 +57,11 @@ func (afb *fileQueryBuilder) execute(filesQuery *api.FilesListParams, userId int
 		count = res[0].Total
 	}
 
-	files := utils.Map(res, func(item fileResponse) api.File { return *mapper.ToFileOut(item.File) })
+	files := utils.Map(res, func(item fileResponse) api.File {
+		file := mapper.ToFileOut(item.File)
+		file.Path = api.NewOptString(item.Path)
+		return *file
+	})
 
 	return &api.FileList{Items: files,
 		Meta: api.Meta{Count: count,
