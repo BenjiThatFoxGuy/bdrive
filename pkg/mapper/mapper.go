@@ -15,6 +15,9 @@ func ToFileOut(file models.File) *api.File {
 		Encrypted: api.NewOptBool(*file.Encrypted),
 		UpdatedAt: api.NewOptDateTime(*file.UpdatedAt),
 	}
+	if file.Starred != nil {
+		res.Starred = api.NewOptBool(*file.Starred)
+	}
 	if file.ParentId != nil {
 		res.ParentId = api.NewOptString(*file.ParentId)
 	}

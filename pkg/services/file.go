@@ -895,6 +895,10 @@ func (a *apiService) FilesUpdate(ctx context.Context, req *api.FileUpdate, param
 		isContentUpdate = true
 	}
 
+	if req.Starred.IsSet() {
+		updateDb.Starred = utils.Ptr(req.Starred.Value)
+	}
+
 	// Update UpdatedAt if content changed OR if explicitly set (e.g., SetModTime)
 	if isContentUpdate || req.UpdatedAt.IsSet() {
 		if req.UpdatedAt.IsSet() && !req.UpdatedAt.Value.IsZero() {

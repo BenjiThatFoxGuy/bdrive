@@ -28,7 +28,7 @@ type fileResponse struct {
 
 const folderCategory = "folder"
 
-var selectedFields = []string{"id", "name", "type", "mime_type", "category", "hash", "channel_id", "encrypted", "size", "parent_id", "updated_at", "teldrive.get_path_from_file_id(id) as path"}
+var selectedFields = []string{"id", "name", "type", "mime_type", "category", "hash", "channel_id", "encrypted", "starred", "size", "parent_id", "updated_at", "teldrive.get_path_from_file_id(id) as path"}
 
 func (afb *fileQueryBuilder) execute(filesQuery *api.FilesListParams, userId int64) (*api.FileList, error) {
 	query := afb.db.Where("user_id = ?", userId).Where("status = ?", filesQuery.Status.Value)
@@ -142,6 +142,10 @@ func (afb *fileQueryBuilder) applyFileSpecificFilters(query *gorm.DB, filesQuery
 
 	if filesQuery.Shared.Value {
 		query = query.Where("id in (SELECT file_id FROM teldrive.file_shares where user_id = ?)", userId)
+	}
+
+	if filesQuery.Starred.IsSet() {
+		query = query.Where("starred = ?", filesQuery.Starred.Value)
 	}
 
 	return query
