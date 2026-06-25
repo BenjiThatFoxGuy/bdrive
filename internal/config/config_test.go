@@ -58,6 +58,7 @@ func TestConfigLoader_LoadDefaults(t *testing.T) {
 	assert.Equal(t, 12*time.Hour, cfg.CronJobs.CleanUploadsInterval)
 	assert.Equal(t, 2*time.Hour, cfg.CronJobs.FolderSizeInterval)
 	assert.Equal(t, true, cfg.TG.RateLimit)
+	assert.Equal(t, true, cfg.Files.EnableZipDownload)
 	assert.Equal(t, 5, cfg.TG.RateBurst)
 	assert.Equal(t, 100, cfg.TG.Rate)
 	assert.Equal(t, 5*time.Minute, cfg.TG.ReconnectTimeout)
@@ -133,6 +134,31 @@ rate = 200
 	// Test that other values still use defaults
 	assert.Equal(t, time.Hour, cfg.Server.ReadTimeout)
 	assert.Equal(t, time.Hour, cfg.Server.WriteTimeout)
+}
+
+func TestConfigLoader_FilesEnableZipDownload(t *testing.T) {
+	loader := NewConfigLoader()
+	var cfg ServerCmdConfig
+
+	tempDir := t.TempDir()
+	configPath := filepath.Join(tempDir, "config.toml")
+
+	// Explicitly disable the setting
+	configContent := `
+[files]
+enable-zip-download = false
+`
+	err := os.WriteFile(configPath, []byte(configContent), 0644)
+	require.NoError(t, err)
+
+	cmd := &cobra.Command{Use: "test"}
+	loader.RegisterFlags(cmd.Flags(), reflect.TypeFor[ServerCmdConfig]())
+	require.NoError(t, cmd.Flags().Set("config", configPath))
+
+	err = loader.Load(cmd, &cfg)
+	require.NoError(t, err)
+
+	assert.Equal(t, false, cfg.Files.EnableZipDownload)
 }
 
 func TestConfigLoader_CommandLineFlags(t *testing.T) {

@@ -21,6 +21,9 @@ max-idle-connections = 25
 max-lifetime = '10m'
 max-open-connections = 25
 
+[files]
+enable-zip-download = true
+
 [jwt]
 session-time = '30d'
 secret = ''

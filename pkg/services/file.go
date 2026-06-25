@@ -1,6 +1,7 @@
 package services
 
 import (
+	"archive/zip"
 	"context"
 	"errors"
 	"fmt"
@@ -16,6 +17,7 @@ import (
 	"github.com/gotd/td/tg"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/tgdrive/teldrive/internal/api"
+	"github.com/tgdrive/teldrive/internal/appcontext"
 	"github.com/tgdrive/teldrive/internal/auth"
 	"github.com/tgdrive/teldrive/internal/cache"
 	"github.com/tgdrive/teldrive/internal/category"
@@ -527,6 +529,179 @@ func (a *apiService) FilesGetById(ctx context.Context, params api.FilesGetByIdPa
 	}
 
 	return res, nil
+}
+
+func (a *apiService) FilesDownloadZip(ctx context.Context, req *api.FileZipDownload) (*api.FilesDownloadZipOKHeaders, error) {
+	if !a.cnf.Files.EnableZipDownload {
+		return nil, &apiError{err: errors.New("zip download is disabled"), code: http.StatusForbidden}
+	}
+
+	userId := auth.GetUser(ctx)
+
+	var files []models.File
+	if err := a.db.Model(&models.File{}).Where("id IN (?) AND user_id = ?", req.Ids, userId).
+		Where("type = ?", "file").Find(&files).Error; err != nil {
+		return nil, &apiError{err: err}
+	}
+	if len(files) == 0 {
+		return nil, &apiError{err: errors.New("no files found"), code: 404}
+	}
+
+	tgSession := auth.GetJWTUser(ctx).TgSession
+
+	pr, err := a.streamZip(ctx, userId, tgSession, files)
+	if err != nil {
+		return nil, err
+	}
+
+	return &api.FilesDownloadZipOKHeaders{
+		ContentDisposition: mime.FormatMediaType("attachment", map[string]string{"filename": "download.zip"}),
+		Response:           api.FilesDownloadZipOK{Data: pr},
+	}, nil
+}
+
+func (a *apiService) SharesDownloadZip(ctx context.Context, req *api.FileZipDownload, params api.SharesDownloadZipParams) (*api.SharesDownloadZipOKHeaders, error) {
+	if !a.cnf.Files.EnableZipDownload {
+		return nil, &apiError{err: errors.New("zip download is disabled"), code: http.StatusForbidden}
+	}
+
+	c := ctx.(*appcontext.Context)
+	share, err := a.validFileShare(c.Request, params.ID)
+	if err != nil {
+		return nil, err
+	}
+
+	var files []models.File
+	if err := a.db.Model(&models.File{}).Where("id IN (?) AND user_id = ?", req.Ids, share.UserId).
+		Where("type = ?", "file").Find(&files).Error; err != nil {
+		return nil, &apiError{err: err}
+	}
+	if len(files) == 0 {
+		return nil, &apiError{err: errors.New("no files found"), code: 404}
+	}
+
+	pr, err := a.streamZip(ctx, share.UserId, "", files)
+	if err != nil {
+		return nil, err
+	}
+
+	return &api.SharesDownloadZipOKHeaders{
+		ContentDisposition: mime.FormatMediaType("attachment", map[string]string{"filename": "download.zip"}),
+		Response:           api.SharesDownloadZipOK{Data: pr},
+	}, nil
+}
+
+// streamZip resolves a Telegram client for userId (using tgSession as the
+// fallback session when the user has no bots configured) and streams files
+// into a zip archive, returning a reader that produces the archive as it's
+// written. tgSession may be empty when the caller doesn't have access to the
+// owning user's own session (e.g. a share viewer), in which case streaming
+// requires the user to have bots configured.
+func (a *apiService) streamZip(ctx context.Context, userId int64, tgSession string, files []models.File) (io.Reader, error) {
+	tokens, err := a.channelManager.BotTokens(ctx, userId)
+	if err != nil {
+		return nil, &apiError{err: err}
+	}
+	if limit := a.cnf.TG.Stream.BotsLimit; limit > 0 && len(tokens) > limit {
+		tokens = tokens[:limit]
+	}
+
+	var client *telegram.Client
+	var token string
+	if len(tokens) == 0 {
+		if tgSession == "" {
+			return nil, &apiError{err: errors.New("no bots configured for this account"), code: http.StatusForbidden}
+		}
+		client, err = tgc.AuthClient(ctx, &a.cnf.TG, tgSession, a.newMiddlewares(ctx, 5)...)
+		if err != nil {
+			return nil, &apiError{err: err}
+		}
+	} else {
+		token, _, err = a.botSelector.Next(ctx, tgc.BotOpStream, userId, tokens)
+		if err != nil {
+			return nil, &apiError{err: err}
+		}
+		client, err = tgc.BotClient(ctx, a.db, a.cache, &a.cnf.TG, token, a.newMiddlewares(ctx, 5)...)
+		if err != nil {
+			return nil, &apiError{err: err}
+		}
+	}
+
+	botID := strconv.FormatInt(userId, 10)
+	if token != "" {
+		if parts := strings.Split(token, ":"); len(parts) > 0 {
+			botID = parts[0]
+		}
+	}
+
+	pr, pw := io.Pipe()
+
+	go func() {
+		zw := zip.NewWriter(pw)
+		logger := logging.Component("FILE").With(zap.Int64("user_id", userId))
+
+		err := tgc.RunWithAuth(ctx, client, token, func(ctx context.Context) error {
+			usedNames := make(map[string]int)
+			for i := range files {
+				file := &files[i]
+
+				name := file.Name
+				if n, seen := usedNames[name]; seen {
+					usedNames[name] = n + 1
+					ext := strings.LastIndex(name, ".")
+					if ext > 0 {
+						name = fmt.Sprintf("%s (%d)%s", name[:ext], n+1, name[ext:])
+					} else {
+						name = fmt.Sprintf("%s (%d)", name, n+1)
+					}
+				} else {
+					usedNames[name] = 0
+				}
+
+				if file.Size == nil || *file.Size == 0 {
+					if _, err := zw.Create(name); err != nil {
+						return err
+					}
+					continue
+				}
+
+				parts, err := getParts(ctx, client, a.cache, file)
+				if err != nil {
+					logger.Error("zip.parts_fetch_failed", zap.String("file_id", file.ID), zap.Error(err))
+					return err
+				}
+
+				lr, err := reader.NewReader(ctx, client.API(), a.cache, file, parts, 0, *file.Size-1, &a.cnf.TG, botID)
+				if err != nil {
+					logger.Error("zip.reader_create_failed", zap.String("file_id", file.ID), zap.Error(err))
+					return err
+				}
+
+				zf, err := zw.Create(name)
+				if err != nil {
+					lr.Close()
+					return err
+				}
+
+				_, err = io.Copy(zf, lr)
+				lr.Close()
+				if err != nil {
+					return err
+				}
+			}
+			return nil
+		})
+
+		if err != nil {
+			logger.Error("zip.stream_failed", zap.Error(err))
+		}
+		if cerr := zw.Close(); cerr != nil && err == nil {
+			err = cerr
+		}
+		pw.CloseWithError(err)
+	}()
+
+	return pr, nil
 }
 
 func (a *apiService) FilesList(ctx context.Context, params api.FilesListParams) (*api.FileList, error) {

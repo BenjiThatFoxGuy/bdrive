@@ -58,6 +58,7 @@ type ServerCmdConfig struct {
 	Cache    CacheConfig
 	Redis    RedisConfig
 	Events   EventConfig
+	Files    FilesConfig
 }
 
 type CheckCmdConfig struct {
@@ -78,6 +79,10 @@ type ServerConfig struct {
 	EnablePprof      bool          `default:"false" description:"Enable pprof debugging endpoints"`
 	ReadTimeout      time.Duration `default:"1h" description:"Maximum duration for reading entire request"`
 	WriteTimeout     time.Duration `default:"1h" description:"Maximum duration for writing response"`
+}
+
+type FilesConfig struct {
+	EnableZipDownload bool `default:"true" description:"Allow downloading multiple files bundled as a zip archive"`
 }
 
 type CacheConfig struct {

@@ -48,6 +48,10 @@ func (a *apiService) VersionVersion(ctx context.Context) (*api.ApiVersion, error
 	return version.GetVersionInfo(), nil
 }
 
+func (a *apiService) ConfigConfig(ctx context.Context) (*api.ServerConfig, error) {
+	return &api.ServerConfig{ZipDownloadEnabled: a.cnf.Files.EnableZipDownload}, nil
+}
+
 func (a *apiService) EventsGetEvents(ctx context.Context) ([]api.Event, error) {
 	//Get latest events within 5 minutes
 	userId := auth.GetUser(ctx)
