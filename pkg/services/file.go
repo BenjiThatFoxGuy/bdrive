@@ -531,6 +531,87 @@ func (a *apiService) FilesGetById(ctx context.Context, params api.FilesGetByIdPa
 	return res, nil
 }
 
+func (a *apiService) collectFilesRecursive(db *gorm.DB, ids []string, userId int64) ([]models.File, error) {
+	var files []models.File
+	var toProcess []string = ids
+	processed := make(map[string]bool)
+
+	for len(toProcess) > 0 {
+		var currentBatch []models.File
+		if err := db.Model(&models.File{}).Where("id IN (?) AND user_id = ?", toProcess, userId).
+			Where("status = ?", "active").Find(&currentBatch).Error; err != nil {
+			return nil, err
+		}
+
+		toProcess = nil
+		for _, file := range currentBatch {
+			if processed[file.ID] {
+				continue
+			}
+			processed[file.ID] = true
+
+			if file.Type == "file" {
+				files = append(files, file)
+			} else if file.Type == "folder" {
+				var childIds []string
+				if err := db.Model(&models.File{}).Where("parent_id = ? AND user_id = ?", file.ID, userId).
+					Where("status = ?", "active").Pluck("id", &childIds).Error; err != nil {
+					return nil, err
+				}
+				toProcess = append(toProcess, childIds...)
+			}
+		}
+	}
+
+	return files, nil
+}
+
+func (a *apiService) buildRelativePath(db *gorm.DB, fileId string, rootFolderId string) (string, error) {
+	var pathParts []string
+	currentId := fileId
+
+	for {
+		var file models.File
+		if err := db.Where("id = ?", currentId).First(&file).Error; err != nil {
+			return "", err
+		}
+
+		pathParts = append([]string{file.Name}, pathParts...)
+
+		if file.ParentId == nil || *file.ParentId == "" || *file.ParentId == rootFolderId {
+			break
+		}
+
+		currentId = *file.ParentId
+	}
+
+	return strings.Join(pathParts, "/"), nil
+}
+
+func (a *apiService) getZipMetadata(db *gorm.DB, ids []string, userId int64) (string, bool, error) {
+	if len(ids) != 1 {
+		return "download.zip", false, nil
+	}
+
+	var item models.File
+	if err := db.Where("id = ? AND user_id = ?", ids[0], userId).First(&item).Error; err != nil {
+		return "download.zip", false, nil
+	}
+
+	if item.Type == "folder" {
+		return fmt.Sprintf("%s.zip", item.Name), true, nil
+	}
+
+	if item.ParentId != nil {
+		var parent models.File
+		if err := db.Where("id = ?", *item.ParentId).First(&parent).Error; err == nil {
+			return fmt.Sprintf("%s.zip", parent.Name), false, nil
+		}
+	}
+
+	return "download.zip", false, nil
+}
+
 func (a *apiService) FilesDownloadZip(ctx context.Context, req *api.FileZipDownload) (*api.FilesDownloadZipOKHeaders, error) {
 	if !a.cnf.Files.EnableZipDownload {
 		return nil, &apiError{err: errors.New("zip download is disabled"), code: http.StatusForbidden}
@@ -538,24 +619,28 @@ func (a *apiService) FilesDownloadZip(ctx context.Context, req *api.FileZipDownl
 
 	userId := auth.GetUser(ctx)
 
-	var files []models.File
-	if err := a.db.Model(&models.File{}).Where("id IN (?) AND user_id = ?", req.Ids, userId).
-		Where("type = ?", "file").Find(&files).Error; err != nil {
+	files, err := a.collectFilesRecursive(a.db, req.Ids, userId)
+	if err != nil {
 		return nil, &apiError{err: err}
 	}
 	if len(files) == 0 {
 		return nil, &apiError{err: errors.New("no files found"), code: 404}
 	}
 
+	zipFilename, isSingleFolder, err := a.getZipMetadata(a.db, req.Ids, userId)
+	if err != nil {
+		return nil, &apiError{err: err}
+	}
+
 	tgSession := auth.GetJWTUser(ctx).TgSession
 
-	pr, err := a.streamZip(ctx, userId, tgSession, files)
+	pr, err := a.streamZip(ctx, userId, tgSession, files, req.Ids, isSingleFolder)
 	if err != nil {
 		return nil, err
 	}
 
 	return &api.FilesDownloadZipOKHeaders{
-		ContentDisposition: mime.FormatMediaType("attachment", map[string]string{"filename": "download.zip"}),
+		ContentDisposition: mime.FormatMediaType("attachment", map[string]string{"filename": zipFilename}),
 		Response:           api.FilesDownloadZipOK{Data: pr},
 	}, nil
 }
@@ -571,22 +656,26 @@ func (a *apiService) SharesDownloadZip(ctx context.Context, req *api.FileZipDown
 		return nil, err
 	}
 
-	var files []models.File
-	if err := a.db.Model(&models.File{}).Where("id IN (?) AND user_id = ?", req.Ids, share.UserId).
-		Where("type = ?", "file").Find(&files).Error; err != nil {
+	files, err := a.collectFilesRecursive(a.db, req.Ids, share.UserId)
+	if err != nil {
 		return nil, &apiError{err: err}
 	}
 	if len(files) == 0 {
 		return nil, &apiError{err: errors.New("no files found"), code: 404}
 	}
 
-	pr, err := a.streamZip(ctx, share.UserId, "", files)
+	zipFilename, isSingleFolder, err := a.getZipMetadata(a.db, req.Ids, share.UserId)
+	if err != nil {
+		return nil, &apiError{err: err}
+	}
+
+	pr, err := a.streamZip(ctx, share.UserId, "", files, req.Ids, isSingleFolder)
 	if err != nil {
 		return nil, err
 	}
 
 	return &api.SharesDownloadZipOKHeaders{
-		ContentDisposition: mime.FormatMediaType("attachment", map[string]string{"filename": "download.zip"}),
+		ContentDisposition: mime.FormatMediaType("attachment", map[string]string{"filename": zipFilename}),
 		Response:           api.SharesDownloadZipOK{Data: pr},
 	}, nil
 }
@@ -597,7 +686,9 @@ func (a *apiService) SharesDownloadZip(ctx context.Context, req *api.FileZipDown
 // written. tgSession may be empty when the caller doesn't have access to the
 // owning user's own session (e.g. a share viewer), in which case streaming
 // requires the user to have bots configured.
-func (a *apiService) streamZip(ctx context.Context, userId int64, tgSession string, files []models.File) (io.Reader, error) {
+// isSingleFolder indicates if we're downloading a single folder, in which case
+// the folder name will be included in the zip paths.
+func (a *apiService) streamZip(ctx context.Context, userId int64, tgSession string, files []models.File, selectedIds []string, isSingleFolder bool) (io.Reader, error) {
 	tokens, err := a.channelManager.BotTokens(ctx, userId)
 	if err != nil {
 		return nil, &apiError{err: err}
@@ -642,10 +733,31 @@ func (a *apiService) streamZip(ctx context.Context, userId int64, tgSession stri
 
 		err := tgc.RunWithAuth(ctx, client, token, func(ctx context.Context) error {
 			usedNames := make(map[string]int)
+			var folderName string
+			var folderID string
+			if isSingleFolder && len(selectedIds) > 0 {
+				var folder models.File
+				if err := a.db.Where("id = ?", selectedIds[0]).First(&folder).Error; err == nil {
+					folderName = folder.Name
+					folderID = folder.ID
+				}
+			}
+
 			for i := range files {
 				file := &files[i]
 
-				name := file.Name
+				var name string
+				if isSingleFolder && folderName != "" {
+					relativePath, err := a.buildRelativePath(a.db, file.ID, folderID)
+					if err == nil && relativePath != "" {
+						name = fmt.Sprintf("%s/%s", folderName, relativePath)
+					} else {
+						name = fmt.Sprintf("%s/%s", folderName, file.Name)
+					}
+				} else {
+					name = file.Name
+				}
+
 				if n, seen := usedNames[name]; seen {
 					usedNames[name] = n + 1
 					ext := strings.LastIndex(name, ".")
