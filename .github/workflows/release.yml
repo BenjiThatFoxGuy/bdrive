@@ -9,6 +9,8 @@ on:
   pull_request:
     types: [opened, synchronize, reopened]
   workflow_dispatch:
+  repository_dispatch:
+    types: [ui-published, docs-published]
 
 permissions: write-all
 
@@ -20,6 +22,13 @@ jobs:
       targets: ${{ steps.targets.outputs.targets }}
       is_release: ${{ steps.targets.outputs.is_release }}
     steps:
+      - name: Log external trigger
+        if: github.event_name == 'repository_dispatch'
+        run: |
+          echo "Triggered externally via repository_dispatch (type: ${{ github.event.action }})"
+          echo "Source repo: ${{ github.event.client_payload.repo }}"
+          echo "Source sha:  ${{ github.event.client_payload.sha }}"
+
       - name: Determine build matrix
         id: targets
         run: |
