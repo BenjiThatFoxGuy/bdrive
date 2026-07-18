@@ -40,3 +40,4 @@ internal/api
 /dist
 .DS_Store
 docs/DEDUPLICATION.md
+bdrive
