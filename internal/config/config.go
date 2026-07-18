@@ -73,6 +73,15 @@ type CheckCmdConfig struct {
 	CleanPending bool          `default:"false" description:"Clean files with pending_deletion status"`
 }
 
+type DeduplicateCmdConfig struct {
+	Log      LoggingConfig `skipPflag:"true"`
+	DB       DBConfig      ``
+	TG       TGConfig      `skipPflag:"true"`
+	DryRun   bool          `default:"false" description:"Simulate deduplication without making changes"`
+	User     string        `default:"" description:"Telegram username to deduplicate (prompts if not specified)"`
+	Backfill bool          `default:"false" description:"Compute and persist hashes for files that don't have one yet (legacy files predating dedup, or files created without a hash) before grouping duplicates"`
+}
+
 type ServerConfig struct {
 	Port             int           `default:"8080" description:"HTTP port for the server to listen on"`
 	GracefulShutdown time.Duration `default:"10s" description:"Grace period for server shutdown"`

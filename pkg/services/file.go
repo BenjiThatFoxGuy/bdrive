@@ -350,6 +350,8 @@ func (a *apiService) FilesCreate(ctx context.Context, fileIn *api.File) (*api.Fi
 			fileDB.Parts = utils.Ptr(datatypes.NewJSONSlice(mapParts(parts)))
 		}
 
+		fileDB.Size = utils.Ptr(fileIn.Size.Value)
+
 		// Compute BLAKE3 tree hash from block hashes if uploadId is provided
 		if uploadId != "" && len(uploads) > 0 {
 			var allBlockHashes []byte
@@ -367,9 +369,26 @@ func (a *apiService) FilesCreate(ctx context.Context, fileIn *api.File) (*api.Fi
 			treeHashBytes := hash.ComputeTreeHash([]byte{})
 			treeHash := hash.SumToHex(treeHashBytes)
 			fileDB.Hash = &treeHash
+		} else if uploadId == "" && len(parts) > 0 && !fileIn.Encrypted.Value {
+			// Backwards-compatible dedup: parts were supplied directly (bypassing the
+			// /uploads + uploadId flow), so no hash was computed above. Best-effort compute
+			// one now by re-reading the content back from Telegram, so files created this
+			// way can still be deduplicated. Never fails the create - just skips the hash.
+			client, token, botID, cerr := ResolveUserClient(ctx, a.db, a.cache, &a.cnf.TG,
+				a.channelManager, a.botSelector, userId, auth.GetJWTUser(ctx).TgSession)
+			if cerr != nil {
+				logging.FromContext(ctx).Error("dedup hash backfill: resolve client failed", zap.Error(cerr))
+			} else if herr := tgc.RunWithAuth(ctx, client, token, func(ctx context.Context) error {
+				h, err := ComputeFileContentHash(ctx, client, a.cache, &a.cnf.TG, botID, &fileDB)
+				if err != nil {
+					return err
+				}
+				fileDB.Hash = &h
+				return nil
+			}); herr != nil {
+				logging.FromContext(ctx).Error("dedup hash backfill failed", zap.Error(herr))
+			}
 		}
-
-		fileDB.Size = utils.Ptr(fileIn.Size.Value)
 	}
 	fileDB.Name = fileIn.Name
 	fileDB.Type = string(fileIn.Type)
