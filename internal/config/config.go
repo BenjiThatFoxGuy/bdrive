@@ -63,7 +63,7 @@ type ServerCmdConfig struct {
 
 type CheckCmdConfig struct {
 	Log          LoggingConfig `skipPflag:"true"`
-	DB           DBConfig      `skipPflag:"true"`
+	DB           DBConfig      ``
 	TG           TGConfig      `skipPflag:"true"`
 	ExportFile   string        `default:"results.json" description:"Path for exported JSON file"`
 	DryRun       bool          `default:"false" description:"Simulate check/clean process without making changes"`
