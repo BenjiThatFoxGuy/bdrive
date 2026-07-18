@@ -38,3 +38,6 @@ internal/api
 
 # GoReleaser build output
 /dist
+.DS_Store
+bdrive
+docs/DEDUPLICATION.md
