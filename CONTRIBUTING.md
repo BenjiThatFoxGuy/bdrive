@@ -92,3 +92,20 @@ task gen
    - Describe the changes made
    - Include any relevant issue numbers
    - List any breaking changes
+
+## Important: Deduplication Feature
+
+BDrive implements **file-level deduplication** to reduce storage usage. If you're working on:
+
+- **File upload/modification**: See [docs/DEDUPLICATION.md](docs/DEDUPLICATION.md) for architecture and service functions
+- **Admin tools**: Use the `teldrive deduplicate` command for retroactive deduplication
+- **Frontend (bdrive-ui)**: Implement hash parameter in upload flow
+- **rclone-connector**: Add hash-based dedup detection before upload
+
+**Key Points:**
+- Only non-encrypted files are deduplicated
+- Deduplication uses copy-on-write semantics
+- `ReferencedFileId` field links duplicate files to their canonical copy
+- Dependent repos (bdrive-ui, rclone-connector) need updates to take advantage of dedup
+
+See [docs/DEDUPLICATION.md](docs/DEDUPLICATION.md) for complete implementation details and handoff notes for dependent repositories.

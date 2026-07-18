@@ -30,6 +30,11 @@ func ToFileOut(file models.File) *api.File {
 	if file.Hash != nil && *file.Hash != "" {
 		res.Hash = api.NewOptString(*file.Hash)
 	}
+	// TODO: Add ReferencedFileId field to api.File schema in bdrive-docs OpenAPI spec
+	// Once the schema is updated, uncomment this:
+	// if file.ReferencedFileId != nil && *file.ReferencedFileId != "" {
+	// 	res.ReferencedFileId = api.NewOptString(*file.ReferencedFileId)
+	// }
 	return res
 }
 

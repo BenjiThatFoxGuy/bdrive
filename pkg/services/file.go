@@ -50,6 +50,81 @@ func isUUID(str string) bool {
 	return err == nil
 }
 
+// FindDeduplicateFile finds an existing file with the same hash for a user
+// Returns the file if found, or nil if not found
+// Only considers non-encrypted files and active status
+func (a *apiService) FindDeduplicateFile(ctx context.Context, userId int64, fileHash string) (*models.File, error) {
+	if fileHash == "" {
+		return nil, nil // No hash provided, no dedup check
+	}
+
+	var file models.File
+	if err := a.db.Where(
+		"user_id = ? AND hash = ? AND encrypted = false AND status = 'active'",
+		userId, fileHash,
+	).Order("created_at ASC"). // Get oldest matching file as canonical
+					First(&file).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, nil // No duplicate found
+		}
+		return nil, err
+	}
+	return &file, nil
+}
+
+// GetDeduplicationReferences finds all files that share the same hash with a given file
+// Used to show users what other files have the same content
+func (a *apiService) GetDeduplicationReferences(ctx context.Context, fileId string) ([]models.File, error) {
+	// First, get the file to find its hash
+	var sourceFile models.File
+	if err := a.db.Where("id = ?", fileId).First(&sourceFile).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return []models.File{}, nil
+		}
+		return nil, err
+	}
+
+	if sourceFile.Hash == nil || *sourceFile.Hash == "" {
+		return []models.File{}, nil // No hash, no references
+	}
+
+	// Find all other files with same hash (including through ReferencedFileId)
+	var references []models.File
+	err := a.db.Where(
+		"user_id = ? AND hash = ? AND id != ? AND encrypted = false AND status = 'active'",
+		sourceFile.UserId, *sourceFile.Hash, fileId,
+	).Find(&references).Error
+
+	if err != nil {
+		return nil, err
+	}
+	return references, nil
+}
+
+// CountDedupReferences counts how many other files share the same hash with a given file
+// Returns 0 if no other files share the hash (meaning this is the only copy or first canonical copy)
+func (a *apiService) CountDedupReferences(ctx context.Context, fileId string) (int64, error) {
+	var sourceFile models.File
+	if err := a.db.Where("id = ?", fileId).First(&sourceFile).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return 0, nil
+		}
+		return 0, err
+	}
+
+	if sourceFile.Hash == nil || *sourceFile.Hash == "" {
+		return 0, nil // No hash, no references
+	}
+
+	var count int64
+	err := a.db.Model(&models.File{}).Where(
+		"user_id = ? AND hash = ? AND id != ? AND encrypted = false AND status = 'active'",
+		sourceFile.UserId, *sourceFile.Hash, fileId,
+	).Count(&count).Error
+
+	return count, err
+}
+
 func (a *apiService) FilesCategoryStats(ctx context.Context) ([]api.CategoryStats, error) {
 	userId := auth.GetUser(ctx)
 	var stats []api.CategoryStats
@@ -261,7 +336,7 @@ func (a *apiService) FilesCreate(ctx context.Context, fileIn *api.File) (*api.Fi
 					return nil, &apiError{err: errors.New("invalid part: part_id cannot be zero"), code: 400}
 				}
 			}
-			
+
 			// Convert uploads to parts
 			for _, upload := range uploads {
 				parts = append(parts, api.Part{
@@ -307,15 +382,32 @@ func (a *apiService) FilesCreate(ctx context.Context, fileIn *api.File) (*api.Fi
 		fileDB.UpdatedAt = utils.Ptr(time.Now().UTC())
 	}
 
+	// Check for deduplication: if file is not encrypted and has a hash, look for existing file with same hash
+	if !*fileDB.Encrypted && fileDB.Hash != nil && *fileDB.Hash != "" && fileDB.Type == string(api.FileTypeFile) {
+		existingFile, err := a.FindDeduplicateFile(ctx, userId, *fileDB.Hash)
+		if err != nil {
+			// Log error but don't fail the upload due to dedup check
+			logging.FromContext(ctx).Error("dedup check failed", zap.Error(err))
+		}
+		if existingFile != nil {
+			// Found a duplicate: set ReferencedFileId to point to the canonical file
+			// This makes this file a reference to the existing file's Telegram messages
+			fileDB.ReferencedFileId = utils.Ptr(existingFile.ID)
+			// Keep the same Parts and ChannelId as the existing file
+			fileDB.Parts = existingFile.Parts
+			fileDB.ChannelId = existingFile.ChannelId
+		}
+	}
+
 	// Use transaction to ensure file creation and upload cleanup are atomic
 	err = a.db.Transaction(func(tx *gorm.DB) error {
 		//For some reason, gorm conflict clauses are not working with partial index so using raw query
 		if err := tx.Raw(`
 			INSERT INTO teldrive.files (
 				name, parent_id, user_id, mime_type, category, parts,
-				size, type, encrypted, updated_at, channel_id, status, hash
+				size, type, encrypted, updated_at, channel_id, status, hash, referenced_file_id
 			)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			ON CONFLICT (name, COALESCE(parent_id, '00000000-0000-0000-0000-000000000000'::uuid), user_id)
 			WHERE status = 'active'
 			DO UPDATE SET
@@ -328,13 +420,14 @@ func (a *apiService) FilesCreate(ctx context.Context, fileIn *api.File) (*api.Fi
 				updated_at = EXCLUDED.updated_at,
 				channel_id = EXCLUDED.channel_id,
 				status = EXCLUDED.status,
-				hash = EXCLUDED.hash
+				hash = EXCLUDED.hash,
+				referenced_file_id = EXCLUDED.referenced_file_id
 			RETURNING *
 		`,
 			fileDB.Name, fileDB.ParentId, fileDB.UserId, fileDB.MimeType,
 			fileDB.Category, fileDB.Parts, fileDB.Size, fileDB.Type,
 			fileDB.Encrypted, fileDB.UpdatedAt, fileDB.ChannelId, fileDB.Status,
-			fileDB.Hash,
+			fileDB.Hash, fileDB.ReferencedFileId,
 		).Scan(&fileDB).Error; err != nil {
 			return err
 		}
@@ -439,6 +532,23 @@ func (a *apiService) FilesDelete(ctx context.Context, req *api.FileDelete) error
 	if err := a.db.Model(&models.File{}).Where("id = ?", req.Ids[0]).Where("user_id = ?", userId).
 		First(&fileDB).Error; err != nil {
 		return &apiError{err: err}
+	}
+
+	// Check for deduplication references before deletion
+	// If this file has a hash and there are other files with the same hash,
+	// log it for reference purposes (UI/client can be enhanced to show this info)
+	if fileDB.Hash != nil && *fileDB.Hash != "" && !*fileDB.Encrypted {
+		refCount, err := a.CountDedupReferences(ctx, fileDB.ID)
+		if err != nil {
+			logging.FromContext(ctx).Error("failed to count dedup references", zap.Error(err))
+		}
+		if refCount > 0 {
+			logging.FromContext(ctx).Debug("deleting deduplicated file with references",
+				zap.String("file_id", fileDB.ID),
+				zap.String("file_hash", *fileDB.Hash),
+				zap.Int64("ref_count", refCount),
+			)
+		}
 	}
 
 	if err := a.deleteFilesBulk(a.db, req.Ids, userId); err != nil {
@@ -1023,6 +1133,18 @@ func (a *apiService) FilesUpdate(ctx context.Context, req *api.FileUpdate, param
 	// Use transaction for atomic update
 	var file models.File
 	err := a.db.Transaction(func(tx *gorm.DB) error {
+		// Fetch current file to check if it's a deduplicated copy (ReferencedFileId is set)
+		var currentFile models.File
+		if err := tx.Where("id = ?", params.ID).First(&currentFile).Error; err != nil {
+			return err
+		}
+
+		// COPY-ON-WRITE: If content is being updated and this file is a reference to another file,
+		// break the dedup link by clearing ReferencedFileId (make this file its own canonical copy)
+		if isContentUpdate && currentFile.ReferencedFileId != nil && *currentFile.ReferencedFileId != "" {
+			updateDb.ReferencedFileId = utils.Ptr("") // Clear reference, make this file canonical
+		}
+
 		// Compute BLAKE3 tree hash if uploadId provided
 		if uploadId != "" && len(uploads) > 0 {
 			var allBlockHashes []byte
@@ -1034,6 +1156,18 @@ func (a *apiService) FilesUpdate(ctx context.Context, req *api.FileUpdate, param
 				treeHashBytes := hash.ComputeTreeHash(allBlockHashes)
 				treeHash := hash.SumToHex(treeHashBytes)
 				updateDb.Hash = &treeHash
+
+				// DEDUP CHECK: After updating content with new hash, check if it matches another file's hash
+				// If it does, we might be re-deduplicating with a different file (less common but possible)
+				newHash := hash.SumToHex(treeHashBytes)
+				existingFile, err := a.FindDeduplicateFile(ctx, currentFile.UserId, newHash)
+				if err != nil {
+					logging.FromContext(ctx).Error("dedup check on update failed", zap.Error(err))
+				}
+				if existingFile != nil && existingFile.ID != currentFile.ID {
+					// Found a duplicate with new hash: point this file to the canonical copy
+					updateDb.ReferencedFileId = utils.Ptr(existingFile.ID)
+				}
 			}
 		}
 

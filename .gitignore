@@ -39,3 +39,4 @@ internal/api
 # GoReleaser build output
 /dist
 .DS_Store
+docs/DEDUPLICATION.md
