@@ -63,7 +63,7 @@ type ServerCmdConfig struct {
 
 type CheckCmdConfig struct {
 	Log          LoggingConfig `skipPflag:"true"`
-	DB           DBConfig      `skipPflag:"true"`
+	DB           DBConfig      ``
 	TG           TGConfig      `skipPflag:"true"`
 	ExportFile   string        `default:"results.json" description:"Path for exported JSON file"`
 	DryRun       bool          `default:"false" description:"Simulate check/clean process without making changes"`
@@ -71,6 +71,15 @@ type CheckCmdConfig struct {
 	Concurrent   int           `default:"4" description:"Number of concurrent channel processing"`
 	CleanUploads bool          `default:"false" description:"Clean incomplete uploads"`
 	CleanPending bool          `default:"false" description:"Clean files with pending_deletion status"`
+}
+
+type DeduplicateCmdConfig struct {
+	Log      LoggingConfig `skipPflag:"true"`
+	DB       DBConfig      ``
+	TG       TGConfig      `skipPflag:"true"`
+	DryRun   bool          `default:"false" description:"Simulate deduplication without making changes"`
+	User     string        `default:"" description:"Telegram username to deduplicate (prompts if not specified)"`
+	Backfill bool          `default:"false" description:"Compute and persist hashes for files that don't have one yet (legacy files predating dedup, or files created without a hash) before grouping duplicates"`
 }
 
 type ServerConfig struct {
