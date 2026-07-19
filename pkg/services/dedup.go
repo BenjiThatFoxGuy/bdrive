@@ -13,6 +13,7 @@ import (
 
 	"github.com/tgdrive/teldrive/internal/api"
 	"github.com/tgdrive/teldrive/internal/auth"
+	"github.com/tgdrive/teldrive/internal/database"
 	"github.com/tgdrive/teldrive/internal/logging"
 	"github.com/tgdrive/teldrive/internal/tgc"
 	"github.com/tgdrive/teldrive/pkg/mapper"
@@ -23,6 +24,10 @@ import (
 // maxDedupJobsPerUser bounds the in-memory job history kept per user so a
 // long-lived server doesn't accumulate records without limit.
 const maxDedupJobsPerUser = 20
+
+// dedupLockRetries is how many times a single file's link/hash write is retried
+// when it hits a transient pgroonga index lock before the file is skipped.
+const dedupLockRetries = 5
 
 // dedupJobRecord is a single tracked job together with its owner.
 type dedupJobRecord struct {
@@ -257,9 +262,32 @@ func (a *apiService) runDedupJob(ctx context.Context, jobID string, userID int64
 	})
 }
 
+// retryTransientLock runs fn, retrying up to maxAttempts times with exponential
+// backoff while it fails with a transient storage-lock error (see
+// database.IsTransientLockErr). This absorbs pgroonga's intermittent
+// "grn_io_lock failed", which surfaces when a burst of row updates contends for
+// the name full-text index. Success or any non-transient error returns at once.
+func retryTransientLock(ctx context.Context, maxAttempts int, fn func() error) error {
+	backoff := 100 * time.Millisecond
+	var err error
+	for attempt := 1; ; attempt++ {
+		if err = fn(); err == nil || !database.IsTransientLockErr(err) || attempt >= maxAttempts {
+			return err
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(backoff):
+		}
+		backoff *= 2
+	}
+}
+
 // dedupUser groups the user's active, non-encrypted files by content hash and
 // links duplicates to a canonical copy, accumulating counters into stats.
 func (a *apiService) dedupUser(ctx context.Context, userID int64, dryRun, backfill bool, stats *api.DedupStats) error {
+	logger := logging.FromContext(ctx)
+
 	var files []models.File
 	if err := a.db.WithContext(ctx).Where(
 		"user_id = ? AND hash IS NOT NULL AND hash != '' AND encrypted = false AND status = 'active' AND type = 'file'",
@@ -293,13 +321,26 @@ func (a *apiService) dedupUser(ctx context.Context, userID int64, dryRun, backfi
 		for i := 1; i < len(group); i++ {
 			dup := group[i]
 			if !dryRun {
-				if err := a.db.WithContext(ctx).Model(&models.File{}).
-					Where("id = ?", dup.ID).
-					Updates(map[string]any{
-						"referenced_file_id": canonical.ID,
-						"parts":              canonical.Parts,
-						"channel_id":         canonical.ChannelId,
-					}).Error; err != nil {
+				err := retryTransientLock(ctx, dedupLockRetries, func() error {
+					return a.db.WithContext(ctx).Model(&models.File{}).
+						Where("id = ?", dup.ID).
+						Updates(map[string]any{
+							"referenced_file_id": canonical.ID,
+							"parts":              canonical.Parts,
+							"channel_id":         canonical.ChannelId,
+						}).Error
+				})
+				if err != nil {
+					// A pgroonga lock that survives every retry shouldn't discard
+					// the progress already made: skip this file and keep going so
+					// the job still completes and reports it. Any other error is
+					// fatal to the run.
+					if database.IsTransientLockErr(err) {
+						logger.Warn("dedup.link.locked",
+							zap.String("file", dup.ID), zap.Error(err))
+						stats.SkippedFiles++
+						continue
+					}
 					return err
 				}
 			}
@@ -377,7 +418,9 @@ func (a *apiService) backfillUserHashes(ctx context.Context, userID int64, dryRu
 		}
 
 		if !dryRun {
-			if err := a.db.WithContext(ctx).Model(&models.File{}).Where("id = ?", file.ID).Update("hash", newHash).Error; err != nil {
+			if err := retryTransientLock(ctx, dedupLockRetries, func() error {
+				return a.db.WithContext(ctx).Model(&models.File{}).Where("id = ?", file.ID).Update("hash", newHash).Error
+			}); err != nil {
 				stats.SkippedFiles++
 				continue
 			}
