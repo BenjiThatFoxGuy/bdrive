@@ -8,14 +8,11 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/gotd/td/telegram"
 	"gorm.io/gorm"
 
 	"github.com/tgdrive/teldrive/internal/api"
 	"github.com/tgdrive/teldrive/internal/auth"
-	"github.com/tgdrive/teldrive/internal/database"
 	"github.com/tgdrive/teldrive/internal/logging"
-	"github.com/tgdrive/teldrive/internal/tgc"
 	"github.com/tgdrive/teldrive/pkg/mapper"
 	"github.com/tgdrive/teldrive/pkg/models"
 	"go.uber.org/zap"
@@ -24,10 +21,6 @@ import (
 // maxDedupJobsPerUser bounds the in-memory job history kept per user so a
 // long-lived server doesn't accumulate records without limit.
 const maxDedupJobsPerUser = 20
-
-// dedupLockRetries is how many times a single file's link/hash write is retried
-// when it hits a transient pgroonga index lock before the file is skipped.
-const dedupLockRetries = 5
 
 // dedupJobRecord is a single tracked job together with its owner.
 type dedupJobRecord struct {
@@ -232,8 +225,10 @@ func (a *apiService) currentDedupStats(userID int64) (*api.DedupStats, error) {
 }
 
 // runDedupJob executes a deduplication run for a single user, updating the
-// tracked job as it progresses. It mirrors the `teldrive deduplicate` command's
-// grouping (and optional hash backfill) without the interactive/console parts.
+// tracked job as it progresses. It runs the shared dedup core (see
+// runDedupForUser) with hooks that publish live progress and a running stats
+// snapshot into the tracked job, so pollers see the run advance rather than a
+// single jump at the end.
 func (a *apiService) runDedupJob(ctx context.Context, jobID string, userID int64, opts api.DedupJobOptions) {
 	logger := logging.FromContext(ctx)
 
@@ -244,12 +239,36 @@ func (a *apiService) runDedupJob(ctx context.Context, jobID string, userID int64
 
 	stats := api.DedupStats{ProcessedUsers: 1}
 
-	if err := a.dedupUser(ctx, userID, dryRun, backfill, &stats); err != nil {
+	deps := DedupDeps{
+		DB:             a.db,
+		Cache:          a.cache,
+		TG:             &a.cnf.TG,
+		ChannelManager: a.channelManager,
+		BotSelector:    a.botSelector,
+	}
+
+	publish := func(phase string, current, total int64) {
+		a.dedup.update(jobID, func(j *api.DedupJob) {
+			j.Stats = stats
+			j.Progress = api.NewOptDedupProgress(api.DedupProgress{
+				Phase:   api.DedupPhase(phase),
+				Current: current,
+				Total:   total,
+			})
+		})
+	}
+	hooks := DedupHooks{
+		OnPhase:    func(phase string, total int64) { publish(phase, 0, total) },
+		OnProgress: func(phase string, current, total int64) { publish(phase, current, total) },
+	}
+
+	if err := RunDedupForUser(ctx, deps, userID, dryRun, backfill, &stats, hooks); err != nil {
 		logger.Error("dedup.job.failed", zap.String("job", jobID), zap.Error(err))
 		a.dedup.update(jobID, func(j *api.DedupJob) {
 			j.Status = api.DedupJobStatusFailed
 			j.Error = api.NewOptString(err.Error())
 			j.Stats = stats
+			j.Progress = api.OptDedupProgress{}
 			j.FinishedAt = api.NewOptDateTime(time.Now().UTC())
 		})
 		return
@@ -258,178 +277,7 @@ func (a *apiService) runDedupJob(ctx context.Context, jobID string, userID int64
 	a.dedup.update(jobID, func(j *api.DedupJob) {
 		j.Status = api.DedupJobStatusCompleted
 		j.Stats = stats
+		j.Progress = api.OptDedupProgress{}
 		j.FinishedAt = api.NewOptDateTime(time.Now().UTC())
 	})
-}
-
-// retryTransientLock runs fn, retrying up to maxAttempts times with exponential
-// backoff while it fails with a transient storage-lock error (see
-// database.IsTransientLockErr). This absorbs pgroonga's intermittent
-// "grn_io_lock failed", which surfaces when a burst of row updates contends for
-// the name full-text index. Success or any non-transient error returns at once.
-func retryTransientLock(ctx context.Context, maxAttempts int, fn func() error) error {
-	backoff := 100 * time.Millisecond
-	var err error
-	for attempt := 1; ; attempt++ {
-		if err = fn(); err == nil || !database.IsTransientLockErr(err) || attempt >= maxAttempts {
-			return err
-		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(backoff):
-		}
-		backoff *= 2
-	}
-}
-
-// dedupUser groups the user's active, non-encrypted files by content hash and
-// links duplicates to a canonical copy, accumulating counters into stats.
-func (a *apiService) dedupUser(ctx context.Context, userID int64, dryRun, backfill bool, stats *api.DedupStats) error {
-	logger := logging.FromContext(ctx)
-
-	var files []models.File
-	if err := a.db.WithContext(ctx).Where(
-		"user_id = ? AND hash IS NOT NULL AND hash != '' AND encrypted = false AND status = 'active' AND type = 'file'",
-		userID,
-	).Find(&files).Error; err != nil {
-		return err
-	}
-
-	if backfill {
-		backfilled, err := a.backfillUserHashes(ctx, userID, dryRun, stats)
-		if err != nil {
-			return err
-		}
-		files = append(files, backfilled...)
-	}
-
-	// Group by hash and link every non-canonical file in a group of duplicates.
-	hashGroups := make(map[string][]models.File)
-	for _, f := range files {
-		if f.Hash != nil && *f.Hash != "" {
-			hashGroups[*f.Hash] = append(hashGroups[*f.Hash], f)
-		}
-	}
-
-	for _, group := range hashGroups {
-		if len(group) <= 1 {
-			continue
-		}
-		stats.DuplicateGroups++
-		canonical := group[0]
-		for i := 1; i < len(group); i++ {
-			dup := group[i]
-			if !dryRun {
-				err := retryTransientLock(ctx, dedupLockRetries, func() error {
-					return a.db.WithContext(ctx).Model(&models.File{}).
-						Where("id = ?", dup.ID).
-						Updates(map[string]any{
-							"referenced_file_id": canonical.ID,
-							"parts":              canonical.Parts,
-							"channel_id":         canonical.ChannelId,
-						}).Error
-				})
-				if err != nil {
-					// A pgroonga lock that survives every retry shouldn't discard
-					// the progress already made: skip this file and keep going so
-					// the job still completes and reports it. Any other error is
-					// fatal to the run.
-					if database.IsTransientLockErr(err) {
-						logger.Warn("dedup.link.locked",
-							zap.String("file", dup.ID), zap.Error(err))
-						stats.SkippedFiles++
-						continue
-					}
-					return err
-				}
-			}
-			stats.TotalFilesLinked++
-		}
-	}
-
-	return nil
-}
-
-// backfillUserHashes computes and (unless dryRun) persists a content hash for
-// the user's files that lack one, so they can participate in grouping. Content
-// is re-read from Telegram, mirroring the deduplicate command's --backfill.
-func (a *apiService) backfillUserHashes(ctx context.Context, userID int64, dryRun bool, stats *api.DedupStats) ([]models.File, error) {
-	var files []models.File
-	if err := a.db.WithContext(ctx).Where(
-		"user_id = ? AND (hash IS NULL OR hash = '') AND encrypted = false AND status = 'active' AND type = 'file'",
-		userID,
-	).Find(&files).Error; err != nil {
-		return nil, err
-	}
-	if len(files) == 0 {
-		return nil, nil
-	}
-
-	var session models.Session
-	fallbackSession := ""
-	if err := a.db.Where("user_id = ?", userID).First(&session).Error; err == nil {
-		fallbackSession = session.Session
-	}
-
-	var (
-		client *telegram.Client
-		token  string
-		botID  string
-	)
-	resolveClient := func() error {
-		if client != nil {
-			return nil
-		}
-		c, t, b, err := ResolveUserClient(ctx, a.db, a.cache, &a.cnf.TG, a.channelManager, a.botSelector, userID, fallbackSession)
-		if err != nil {
-			return err
-		}
-		client, token, botID = c, t, b
-		return nil
-	}
-
-	backfilled := make([]models.File, 0, len(files))
-	for i := range files {
-		file := files[i]
-
-		var (
-			newHash string
-			hashErr error
-		)
-		if file.Size == nil || *file.Size == 0 {
-			newHash, hashErr = ComputeFileContentHash(ctx, nil, a.cache, &a.cnf.TG, "", &file)
-		} else if err := resolveClient(); err != nil {
-			hashErr = err
-		} else {
-			hashErr = tgc.RunWithAuth(ctx, client, token, func(ctx context.Context) error {
-				h, err := ComputeFileContentHash(ctx, client, a.cache, &a.cnf.TG, botID, &file)
-				if err != nil {
-					return err
-				}
-				newHash = h
-				return nil
-			})
-		}
-
-		if hashErr != nil {
-			stats.SkippedFiles++
-			continue
-		}
-
-		if !dryRun {
-			if err := retryTransientLock(ctx, dedupLockRetries, func() error {
-				return a.db.WithContext(ctx).Model(&models.File{}).Where("id = ?", file.ID).Update("hash", newHash).Error
-			}); err != nil {
-				stats.SkippedFiles++
-				continue
-			}
-		}
-
-		file.Hash = &newHash
-		stats.HashesBackfilled++
-		backfilled = append(backfilled, file)
-	}
-
-	return backfilled, nil
 }
