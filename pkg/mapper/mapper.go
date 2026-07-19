@@ -30,9 +30,15 @@ func ToFileOut(file models.File) *api.File {
 	if file.Hash != nil && *file.Hash != "" {
 		res.Hash = api.NewOptString(*file.Hash)
 	}
-	if file.ReferencedFileId != nil && *file.ReferencedFileId != "" {
-		res.ReferencedFileId = api.NewOptString(*file.ReferencedFileId)
-	}
+	// NOTE: res.ReferencedFileId is only available once the bdrive-docs OpenAPI
+	// schema publishes the `referencedFileId` field on File to its main branch
+	// (go generate builds the api package from that spec). The field currently
+	// lives on a separate, unpublished docs branch, so referencing it here breaks
+	// the backend build (and with it every API call, including auth/login).
+	// Re-enable this block in the same change that merges the docs field:
+	// if file.ReferencedFileId != nil && *file.ReferencedFileId != "" {
+	// 	res.ReferencedFileId = api.NewOptString(*file.ReferencedFileId)
+	// }
 	return res
 }
 
