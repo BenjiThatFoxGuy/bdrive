@@ -222,18 +222,6 @@ func (a *apiService) FilesCopy(ctx context.Context, req *api.FileCopy, params ap
 		return nil, &apiError{err: errors.New("failed to copy all file parts")}
 	}
 
-	var parentId string
-	if !isUUID(req.Destination) {
-		var destRes []models.File
-		if err := a.db.Raw("select * from teldrive.create_directories(?, ?)", userId, req.Destination).
-			Scan(&destRes).Error; err != nil {
-			return nil, &apiError{err: err}
-		}
-		parentId = destRes[0].ID
-	} else {
-		parentId = req.Destination
-	}
-
 	dbFile := models.File{}
 
 	dbFile.Name = req.NewName.Or(file.Name)
@@ -245,7 +233,6 @@ func (a *apiService) FilesCopy(ctx context.Context, req *api.FileCopy, params ap
 	}
 	dbFile.UserId = userId
 	dbFile.Status = "active"
-	dbFile.ParentId = utils.Ptr(parentId)
 	dbFile.ChannelId = &channelId
 	dbFile.Encrypted = file.Encrypted
 	dbFile.Category = file.Category
@@ -256,7 +243,30 @@ func (a *apiService) FilesCopy(ctx context.Context, req *api.FileCopy, params ap
 		dbFile.UpdatedAt = utils.Ptr(time.Now().UTC())
 	}
 
-	if err := a.db.Create(&dbFile).Error; err != nil {
+	// Use a transaction so destination-folder creation and the file copy commit
+	// (or roll back) together - otherwise a failure creating dbFile can leave an
+	// empty destination folder behind with nothing copied into it.
+	var parentId string
+	err = a.db.Transaction(func(tx *gorm.DB) error {
+		if !isUUID(req.Destination) {
+			var destRes []models.File
+			if err := database.RetryTransientLock(ctx, database.DefaultLockRetryAttempts, func() error {
+				return tx.Raw("select * from teldrive.create_directories(?, ?)", userId, req.Destination).
+					Scan(&destRes).Error
+			}); err != nil {
+				return err
+			}
+			parentId = destRes[0].ID
+		} else {
+			parentId = req.Destination
+		}
+		dbFile.ParentId = utils.Ptr(parentId)
+
+		return database.RetryTransientLock(ctx, database.DefaultLockRetryAttempts, func() error {
+			return tx.Create(&dbFile).Error
+		})
+	})
+	if err != nil {
 		return nil, &apiError{err: err}
 	}
 
@@ -421,33 +431,35 @@ func (a *apiService) FilesCreate(ctx context.Context, fileIn *api.File) (*api.Fi
 	// Use transaction to ensure file creation and upload cleanup are atomic
 	err = a.db.Transaction(func(tx *gorm.DB) error {
 		//For some reason, gorm conflict clauses are not working with partial index so using raw query
-		if err := tx.Raw(`
-			INSERT INTO teldrive.files (
-				name, parent_id, user_id, mime_type, category, parts,
-				size, type, encrypted, updated_at, channel_id, status, hash, referenced_file_id
-			)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-			ON CONFLICT (name, COALESCE(parent_id, '00000000-0000-0000-0000-000000000000'::uuid), user_id)
-			WHERE status = 'active'
-			DO UPDATE SET
-				mime_type = EXCLUDED.mime_type,
-				category = EXCLUDED.category,
-				parts = EXCLUDED.parts,
-				size = EXCLUDED.size,
-				type = EXCLUDED.type,
-				encrypted = EXCLUDED.encrypted,
-				updated_at = EXCLUDED.updated_at,
-				channel_id = EXCLUDED.channel_id,
-				status = EXCLUDED.status,
-				hash = EXCLUDED.hash,
-				referenced_file_id = EXCLUDED.referenced_file_id
-			RETURNING *
-		`,
-			fileDB.Name, fileDB.ParentId, fileDB.UserId, fileDB.MimeType,
-			fileDB.Category, fileDB.Parts, fileDB.Size, fileDB.Type,
-			fileDB.Encrypted, fileDB.UpdatedAt, fileDB.ChannelId, fileDB.Status,
-			fileDB.Hash, fileDB.ReferencedFileId,
-		).Scan(&fileDB).Error; err != nil {
+		if err := database.RetryTransientLock(ctx, database.DefaultLockRetryAttempts, func() error {
+			return tx.Raw(`
+				INSERT INTO teldrive.files (
+					name, parent_id, user_id, mime_type, category, parts,
+					size, type, encrypted, updated_at, channel_id, status, hash, referenced_file_id
+				)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+				ON CONFLICT (name, COALESCE(parent_id, '00000000-0000-0000-0000-000000000000'::uuid), user_id)
+				WHERE status = 'active'
+				DO UPDATE SET
+					mime_type = EXCLUDED.mime_type,
+					category = EXCLUDED.category,
+					parts = EXCLUDED.parts,
+					size = EXCLUDED.size,
+					type = EXCLUDED.type,
+					encrypted = EXCLUDED.encrypted,
+					updated_at = EXCLUDED.updated_at,
+					channel_id = EXCLUDED.channel_id,
+					status = EXCLUDED.status,
+					hash = EXCLUDED.hash,
+					referenced_file_id = EXCLUDED.referenced_file_id
+				RETURNING *
+			`,
+				fileDB.Name, fileDB.ParentId, fileDB.UserId, fileDB.MimeType,
+				fileDB.Category, fileDB.Parts, fileDB.Size, fileDB.Type,
+				fileDB.Encrypted, fileDB.UpdatedAt, fileDB.ChannelId, fileDB.Status,
+				fileDB.Hash, fileDB.ReferencedFileId,
+			).Scan(&fileDB).Error
+		}); err != nil {
 			return err
 		}
 
@@ -504,7 +516,7 @@ func (a *apiService) FilesCreateShare(ctx context.Context, req *api.FileShareCre
 	return nil
 }
 
-func (a *apiService) deleteFilesBulk(db *gorm.DB, fileIds []string, userId int64) error {
+func (a *apiService) deleteFilesBulk(ctx context.Context, db *gorm.DB, fileIds []string, userId int64) error {
 	query := `
 	WITH RECURSIVE target_folders AS (
 		SELECT id FROM teldrive.files WHERE id IN (?) AND user_id = ?
@@ -518,7 +530,9 @@ func (a *apiService) deleteFilesBulk(db *gorm.DB, fileIds []string, userId int64
 	)
 	DELETE FROM teldrive.files WHERE id IN (SELECT id FROM target_folders) AND type = 'folder';
 	`
-	return db.Exec(query, fileIds, userId, fileIds).Error
+	return database.RetryTransientLock(ctx, database.DefaultLockRetryAttempts, func() error {
+		return db.Exec(query, fileIds, userId, fileIds).Error
+	})
 }
 
 func (a *apiService) getFullPath(db *gorm.DB, fileID string) (string, error) {
@@ -570,7 +584,7 @@ func (a *apiService) FilesDelete(ctx context.Context, req *api.FileDelete) error
 		}
 	}
 
-	if err := a.deleteFilesBulk(a.db, req.Ids, userId); err != nil {
+	if err := a.deleteFilesBulk(ctx, a.db, req.Ids, userId); err != nil {
 		return &apiError{err: err}
 	}
 
@@ -956,7 +970,9 @@ func (a *apiService) FilesList(ctx context.Context, params api.FilesListParams) 
 func (a *apiService) FilesMkdir(ctx context.Context, req *api.FileMkDir) error {
 	userId := auth.GetUser(ctx)
 
-	if err := a.db.Exec("select * from teldrive.create_directories(?, ?)", userId, req.Path).Error; err != nil {
+	if err := database.RetryTransientLock(ctx, database.DefaultLockRetryAttempts, func() error {
+		return a.db.Exec("select * from teldrive.create_directories(?, ?)", userId, req.Path).Error
+	}); err != nil {
 		return &apiError{err: err}
 	}
 	return nil
@@ -995,35 +1011,41 @@ func (a *apiService) FilesMove(ctx context.Context, req *api.FileMove) error {
 
 			if err := query.First(&existing).Error; err == nil {
 				if srcFile.Type == "folder" && existing.Type == "folder" {
-					if err := tx.Model(&models.File{}).
-						Where("parent_id = ? AND status = 'active'", existing.ID).
-						Where("name NOT IN (?)",
-							tx.Model(&models.File{}).
-								Select("name").
-								Where("parent_id = ? AND status = 'active'", srcFile.ID),
-						).
-						Update("parent_id", srcFile.ID).Error; err != nil {
+					if err := database.RetryTransientLock(ctx, database.DefaultLockRetryAttempts, func() error {
+						return tx.Model(&models.File{}).
+							Where("parent_id = ? AND status = 'active'", existing.ID).
+							Where("name NOT IN (?)",
+								tx.Model(&models.File{}).
+									Select("name").
+									Where("parent_id = ? AND status = 'active'", srcFile.ID),
+							).
+							Update("parent_id", srcFile.ID).Error
+					}); err != nil {
 						return err
 					}
 				}
-				if err := a.deleteFilesBulk(tx, []string{existing.ID}, userId); err != nil {
+				if err := a.deleteFilesBulk(ctx, tx, []string{existing.ID}, userId); err != nil {
 					return err
 				}
 			}
-			return tx.Model(&models.File{}).
-				Where("id = ? AND user_id = ?", req.Ids[0], userId).
-				Updates(map[string]any{
-					"parent_id": destParentID,
-					"name":      req.DestinationName.Value,
-				}).Error
+			return database.RetryTransientLock(ctx, database.DefaultLockRetryAttempts, func() error {
+				return tx.Model(&models.File{}).
+					Where("id = ? AND user_id = ?", req.Ids[0], userId).
+					Updates(map[string]any{
+						"parent_id": destParentID,
+						"name":      req.DestinationName.Value,
+					}).Error
+			})
 		}
 		items := pgtype.Array[string]{
 			Elements: req.Ids,
 			Valid:    true,
 			Dims:     []pgtype.ArrayDimension{{Length: int32(len(req.Ids)), LowerBound: 1}},
 		}
-		if err := a.db.Model(&models.File{}).Where("id = any(?)", items).Where("user_id = ?", userId).
-			Update("parent_id", destParentID).Error; err != nil {
+		if err := database.RetryTransientLock(ctx, database.DefaultLockRetryAttempts, func() error {
+			return tx.Model(&models.File{}).Where("id = any(?)", items).Where("user_id = ?", userId).
+				Update("parent_id", destParentID).Error
+		}); err != nil {
 			return err
 		}
 
@@ -1196,7 +1218,9 @@ func (a *apiService) FilesUpdate(ctx context.Context, req *api.FileUpdate, param
 			// Force update of updated_at field even when only metadata changes
 			query = query.Select("updated_at")
 		}
-		if err := query.Updates(updateDb).Error; err != nil {
+		if err := database.RetryTransientLock(ctx, database.DefaultLockRetryAttempts, func() error {
+			return query.Updates(updateDb).Error
+		}); err != nil {
 			return err
 		}
 

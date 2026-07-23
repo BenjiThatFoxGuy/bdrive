@@ -2,7 +2,6 @@ package services
 
 import (
 	"context"
-	"time"
 
 	"github.com/gotd/td/telegram"
 	"gorm.io/gorm"
@@ -98,27 +97,6 @@ func (h DedupHooks) skipped(file models.File, err error) {
 	}
 }
 
-// retryTransientLock runs fn, retrying up to maxAttempts times with exponential
-// backoff while it fails with a transient storage-lock error (see
-// database.IsTransientLockErr). This absorbs pgroonga's intermittent
-// "grn_io_lock failed", which surfaces when a burst of row updates contends for
-// the name full-text index. Success or any non-transient error returns at once.
-func retryTransientLock(ctx context.Context, maxAttempts int, fn func() error) error {
-	backoff := 100 * time.Millisecond
-	var err error
-	for attempt := 1; ; attempt++ {
-		if err = fn(); err == nil || !database.IsTransientLockErr(err) || attempt >= maxAttempts {
-			return err
-		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(backoff):
-		}
-		backoff *= 2
-	}
-}
-
 // RunDedupForUser groups userID's active, non-encrypted files by content hash
 // and links duplicates to a canonical copy, accumulating counters into stats
 // and reporting progress through hooks. It is the single implementation shared
@@ -178,7 +156,7 @@ func RunDedupForUser(ctx context.Context, deps DedupDeps, userID int64, dryRun, 
 		for i := 1; i < len(group); i++ {
 			dup := group[i]
 			if !dryRun {
-				err := retryTransientLock(ctx, dedupLockRetries, func() error {
+				err := database.RetryTransientLock(ctx, dedupLockRetries, func() error {
 					return deps.DB.WithContext(ctx).Model(&models.File{}).
 						Where("id = ?", dup.ID).
 						Updates(map[string]any{
@@ -284,7 +262,7 @@ func backfillUserHashes(ctx context.Context, deps DedupDeps, userID int64, dryRu
 		}
 
 		if !dryRun {
-			if err := retryTransientLock(ctx, dedupLockRetries, func() error {
+			if err := database.RetryTransientLock(ctx, dedupLockRetries, func() error {
 				return deps.DB.WithContext(ctx).Model(&models.File{}).Where("id = ?", file.ID).Update("hash", newHash).Error
 			}); err != nil {
 				stats.SkippedFiles++
