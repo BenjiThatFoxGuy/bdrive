@@ -370,7 +370,9 @@ func (cp *channelProcessor) deleteFilesBulk(fileIds []string, userId int64) erro
 	)
 	DELETE FROM teldrive.files WHERE id IN (SELECT id FROM target_folders) AND type = 'folder';
 	`
-	return cp.db.Exec(query, fileIds, userId, fileIds).Error
+	return database.RetryTransientLock(cp.ctx, database.DefaultLockRetryAttempts, func() error {
+		return cp.db.Exec(query, fileIds, userId, fileIds).Error
+	})
 }
 
 func (cp *channelProcessor) deleteOrphanMessages() error {
