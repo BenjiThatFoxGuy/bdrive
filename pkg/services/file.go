@@ -8,6 +8,7 @@ import (
 	"io"
 	"mime"
 	"net/http"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -44,6 +45,26 @@ var (
 	ErrorStreamAbandoned = errors.New("stream abandoned")
 	defaultContentType   = "application/octet-stream"
 )
+
+func init() {
+	// Not in the platform MIME database on most systems, and browsers report
+	// an empty type for it on upload, so passes would otherwise stream as
+	// octet-stream and never hand off to Wallet on iOS and macOS.
+	_ = mime.AddExtensionType(".pkpass", "application/vnd.apple.pkpass")
+}
+
+// contentTypeFor falls back to the file extension when the stored MIME type is
+// missing or the generic default, which is what clients send for any extension
+// the browser doesn't recognize.
+func contentTypeFor(name, mimeType string) string {
+	if mimeType != "" && mimeType != defaultContentType {
+		return mimeType
+	}
+	if byExtension := mime.TypeByExtension(filepath.Ext(name)); byExtension != "" {
+		return byExtension
+	}
+	return defaultContentType
+}
 
 func isUUID(str string) bool {
 	_, err := uuid.Parse(str)
@@ -1314,11 +1335,7 @@ func (e *extendedService) FilesStream(w http.ResponseWriter, r *http.Request, fi
 	var start, end int64
 
 	rangeHeader := r.Header.Get("Range")
-	contentType := defaultContentType
-
-	if file.MimeType != "" {
-		contentType = file.MimeType
-	}
+	contentType := contentTypeFor(file.Name, file.MimeType)
 
 	if file.Size == nil || *file.Size == 0 {
 		w.Header().Set("Content-Type", contentType)
