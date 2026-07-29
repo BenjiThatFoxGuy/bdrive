@@ -41,6 +41,27 @@ func NewCache(ctx context.Context, maxSize int, redisClient *redis.Client, lg *z
 	return NewMemoryCache(maxSize)
 }
 
+// NoopCache satisfies Cacher without storing anything: every Get misses and
+// every write is dropped. Use it for work whose cache key would not be unique
+// — for example hashing a file that has no ID yet, where the shared key would
+// otherwise leak one request's parts into another's.
+type NoopCache struct{}
+
+func NewNoopCache() *NoopCache { return &NoopCache{} }
+
+// Get always reports a miss, so cache.Fetch falls through to its callback.
+func (*NoopCache) Get(ctx context.Context, key string, value any) error {
+	return freecache.ErrNotFound
+}
+
+func (*NoopCache) Set(ctx context.Context, key string, value any, expiration time.Duration) error {
+	return nil
+}
+
+func (*NoopCache) Delete(ctx context.Context, keys ...string) error { return nil }
+
+func (*NoopCache) DeletePattern(ctx context.Context, pattern string) error { return nil }
+
 func NewMemoryCache(size int) *MemoryCache {
 	return &MemoryCache{
 		cache:  freecache.NewCache(size),

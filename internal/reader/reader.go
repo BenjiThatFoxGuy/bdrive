@@ -64,7 +64,7 @@ func NewReader(ctx context.Context,
 ) (io.ReadCloser, error) {
 
 	size := parts[0].Size
-	if *file.Encrypted {
+	if file.IsEncrypted() {
 		size = parts[0].DecryptedSize
 	}
 	r := &Reader{
@@ -151,7 +151,7 @@ func (r *Reader) getPartReader() (io.ReadCloser, error) {
 
 	reader, err = newTGMultiReader(r.ctx, currentRange.Start, currentRange.End, r.config, chunkSrc)
 
-	if *r.file.Encrypted {
+	if r.file.IsEncrypted() {
 		salt := r.parts[r.ranges[r.pos].PartNo].Salt
 		cipher, _ := crypt.NewCipher(r.config.Uploads.EncryptionKey, salt)
 		reader, err = cipher.DecryptDataSeek(r.ctx,
