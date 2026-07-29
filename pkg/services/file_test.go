@@ -3,7 +3,102 @@ package services
 import (
 	"strings"
 	"testing"
+
+	"github.com/tgdrive/teldrive/internal/api"
+	"github.com/tgdrive/teldrive/pkg/models"
 )
+
+func TestBlockHashesCover(t *testing.T) {
+	hashed := func(n int) []models.Upload {
+		uploads := make([]models.Upload, n)
+		for i := range uploads {
+			uploads[i] = models.Upload{PartId: i + 1, BlockHashes: []byte{byte(i)}}
+		}
+		return uploads
+	}
+	parts := func(n int) []api.Part {
+		out := make([]api.Part, n)
+		for i := range out {
+			out[i] = api.Part{ID: i + 1}
+		}
+		return out
+	}
+
+	tests := []struct {
+		name    string
+		uploads []models.Upload
+		parts   []api.Part
+		want    bool
+	}{
+		{
+			name:    "every part has block hashes on record",
+			uploads: hashed(3),
+			parts:   parts(3),
+			want:    true,
+		},
+		{
+			name:    "no upload session to read hashes from",
+			uploads: nil,
+			parts:   parts(1),
+			want:    false,
+		},
+		{
+			name:    "client committed more parts than it uploaded",
+			uploads: hashed(2),
+			parts:   parts(3),
+			want:    false,
+		},
+		{
+			name:    "client committed fewer parts than it uploaded",
+			uploads: hashed(3),
+			parts:   parts(2),
+			want:    false,
+		},
+		{
+			name:    "one part uploaded with hashing disabled",
+			uploads: append(hashed(2), models.Upload{PartId: 3}),
+			parts:   parts(3),
+			want:    false,
+		},
+		{
+			name:    "hashing disabled for the whole upload",
+			uploads: []models.Upload{{PartId: 1}},
+			parts:   parts(1),
+			want:    false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := blockHashesCover(tt.uploads, tt.parts); got != tt.want {
+				t.Errorf("blockHashesCover() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+// The dedup hash backfill hashes a file that has not been inserted yet, so the
+// nullable Encrypted flag has to be readable without a panic.
+func TestFileIsEncrypted(t *testing.T) {
+	yes, no := true, false
+	tests := []struct {
+		name string
+		file models.File
+		want bool
+	}{
+		{name: "unset flag reads as not encrypted", file: models.File{}, want: false},
+		{name: "explicitly not encrypted", file: models.File{Encrypted: &no}, want: false},
+		{name: "encrypted", file: models.File{Encrypted: &yes}, want: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.file.IsEncrypted(); got != tt.want {
+				t.Errorf("IsEncrypted() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
 
 func TestContentTypeFor(t *testing.T) {
 	tests := []struct {

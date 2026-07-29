@@ -29,6 +29,14 @@ func ComputeFileContentHash(ctx context.Context, client *telegram.Client, cacher
 		return hash.SumToHex(hash.ComputeTreeHash(nil)), nil
 	}
 
+	// A file that has not been inserted yet has no ID, and every cache key below
+	// is derived from it. Sharing the ID-less key across requests would hand one
+	// upload another upload's parts (and so another file's hash), so such a file
+	// is hashed with the cache bypassed entirely.
+	if file.ID == "" {
+		cacher = cache.NewNoopCache()
+	}
+
 	parts, err := getParts(ctx, client, cacher, file)
 	if err != nil {
 		return "", err

@@ -71,9 +71,34 @@ func isUUID(str string) bool {
 	return err == nil
 }
 
+// blockHashesCover reports whether uploads carry a complete set of block hashes
+// for parts, i.e. whether concatenating them yields the block hashes of the
+// whole file and so a tree hash that matches what a client computes locally.
+//
+// It requires one upload row per part: a client may send parts explicitly
+// alongside its uploadId, and only when the two line up do the recorded block
+// hashes describe exactly the content being committed. A single part uploaded
+// with hashing disabled leaves a gap that would silently produce a wrong hash,
+// so any missing block hash disqualifies the whole set.
+func blockHashesCover(uploads []models.Upload, parts []api.Part) bool {
+	if len(uploads) == 0 || len(uploads) != len(parts) {
+		return false
+	}
+	for _, upload := range uploads {
+		if len(upload.BlockHashes) == 0 {
+			return false
+		}
+	}
+	return true
+}
+
 // FindDeduplicateFile finds an existing file with the same hash for a user
 // Returns the file if found, or nil if not found
 // Only considers non-encrypted files and active status
+//
+// Rows that are themselves deduplicated copies sort last, so a new copy links to
+// a file that actually owns its Telegram parts rather than chaining through
+// another reference. Folders are excluded: they carry no content to share.
 func (a *apiService) FindDeduplicateFile(ctx context.Context, userId int64, fileHash string) (*models.File, error) {
 	if fileHash == "" {
 		return nil, nil // No hash provided, no dedup check
@@ -81,10 +106,10 @@ func (a *apiService) FindDeduplicateFile(ctx context.Context, userId int64, file
 
 	var file models.File
 	if err := a.db.Where(
-		"user_id = ? AND hash = ? AND encrypted = false AND status = 'active'",
+		"user_id = ? AND hash = ? AND encrypted = false AND status = 'active' AND type = 'file'",
 		userId, fileHash,
-	).Order("created_at ASC"). // Get oldest matching file as canonical
-					First(&file).Error; err != nil {
+	).Order("referenced_file_id IS NOT NULL, created_at ASC"). // Prefer a canonical, oldest first
+									First(&file).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, nil // No duplicate found
 		}
@@ -333,6 +358,20 @@ func (a *apiService) FilesCreate(ctx context.Context, fileIn *api.File) (*api.Fi
 		fileDB.ParentId = utils.Ptr(fileIn.ParentId.Value)
 	}
 
+	// Identity and flags are assigned before the type switch: the dedup hash
+	// backfill below reads content back from Telegram through helpers that expect
+	// a fully populated file (notably Encrypted, which they dereference).
+	fileDB.Name = fileIn.Name
+	fileDB.Type = string(fileIn.Type)
+	fileDB.UserId = userId
+	fileDB.Status = "active"
+	fileDB.Encrypted = utils.Ptr(fileIn.Encrypted.Value)
+	if fileIn.UpdatedAt.IsSet() && !fileIn.UpdatedAt.Value.IsZero() {
+		fileDB.UpdatedAt = utils.Ptr(fileIn.UpdatedAt.Value)
+	} else {
+		fileDB.UpdatedAt = utils.Ptr(time.Now().UTC())
+	}
+
 	switch fileIn.Type {
 	case api.FileTypeFolder:
 		fileDB.MimeType = "drive/folder"
@@ -350,11 +389,10 @@ func (a *apiService) FilesCreate(ctx context.Context, fileIn *api.File) (*api.Fi
 		fileDB.MimeType = fileIn.MimeType.Value
 		fileDB.Category = utils.Ptr(string(category.GetCategory(fileIn.Name)))
 
-		// Handle parts - either from direct input or fetch by uploadId
-		var parts []api.Part
-		if len(fileIn.Parts) > 0 {
-			parts = fileIn.Parts
-		} else if fileIn.UploadId.Value != "" {
+		// Load the upload session whenever the client names one, even if it also
+		// sent the parts list explicitly. The rows carry the per-part block hashes
+		// recorded during upload, which are what makes the tree hash below cheap.
+		if fileIn.UploadId.Value != "" {
 			uploadId = fileIn.UploadId.Value
 			// Fetch parts from uploads table
 			if err := a.db.Where("upload_id = ?", uploadId).Order("part_no").Find(&uploads).Error; err != nil {
@@ -367,7 +405,13 @@ func (a *apiService) FilesCreate(ctx context.Context, fileIn *api.File) (*api.Fi
 					return nil, &apiError{err: errors.New("invalid part: part_id cannot be zero"), code: 400}
 				}
 			}
+		}
 
+		// Handle parts - either from direct input or fetch by uploadId
+		var parts []api.Part
+		if len(fileIn.Parts) > 0 {
+			parts = fileIn.Parts
+		} else {
 			// Convert uploads to parts
 			for _, upload := range uploads {
 				parts = append(parts, api.Part{
@@ -383,28 +427,34 @@ func (a *apiService) FilesCreate(ctx context.Context, fileIn *api.File) (*api.Fi
 
 		fileDB.Size = utils.Ptr(fileIn.Size.Value)
 
-		// Compute BLAKE3 tree hash from block hashes if uploadId is provided
-		if uploadId != "" && len(uploads) > 0 {
+		switch {
+		case blockHashesCover(uploads, parts):
+			// Cheap path: the tree hash is built from the block hashes computed on
+			// the plaintext as each part streamed through /uploads.
 			var allBlockHashes []byte
 			for _, upload := range uploads {
 				allBlockHashes = append(allBlockHashes, upload.BlockHashes...)
 			}
-
-			if len(allBlockHashes) > 0 {
-				treeHashBytes := hash.ComputeTreeHash(allBlockHashes)
-				treeHash := hash.SumToHex(treeHashBytes)
-				fileDB.Hash = &treeHash
-			}
-		} else if fileIn.Size.Value == 0 {
-			// For zero-length files, compute hash of empty data
-			treeHashBytes := hash.ComputeTreeHash([]byte{})
-			treeHash := hash.SumToHex(treeHashBytes)
+			treeHash := hash.SumToHex(hash.ComputeTreeHash(allBlockHashes))
 			fileDB.Hash = &treeHash
-		} else if uploadId == "" && len(parts) > 0 && !fileIn.Encrypted.Value {
-			// Backwards-compatible dedup: parts were supplied directly (bypassing the
-			// /uploads + uploadId flow), so no hash was computed above. Best-effort compute
-			// one now by re-reading the content back from Telegram, so files created this
-			// way can still be deduplicated. Never fails the create - just skips the hash.
+
+		case fileIn.Size.Value == 0:
+			// For zero-length files, compute hash of empty data
+			treeHash := hash.SumToHex(hash.ComputeTreeHash([]byte{}))
+			fileDB.Hash = &treeHash
+
+		case uploadId == "" && len(parts) > 0 && !fileIn.Encrypted.Value:
+			// Backwards-compatible dedup: an older client committed the file by
+			// supplying parts directly, with no upload session to read block hashes
+			// from. Best-effort compute the hash now by re-reading the content back
+			// from Telegram, so files created this way can still be deduplicated.
+			// Never fails the create - just skips the hash.
+			//
+			// A client that did name an upload session is not sent down this path: the
+			// only way it can have no block hashes on record is by having asked for
+			// hashing=false, and silently re-reading the whole file back from Telegram
+			// would defeat the point of that request. Such files are left unhashed for
+			// `deduplicate --backfill` to pick up later.
 			client, token, botID, cerr := ResolveUserClient(ctx, a.db, a.cache, &a.cnf.TG,
 				a.channelManager, a.botSelector, userId, auth.GetJWTUser(ctx).TgSession)
 			if cerr != nil {
@@ -421,19 +471,9 @@ func (a *apiService) FilesCreate(ctx context.Context, fileIn *api.File) (*api.Fi
 			}
 		}
 	}
-	fileDB.Name = fileIn.Name
-	fileDB.Type = string(fileIn.Type)
-	fileDB.UserId = userId
-	fileDB.Status = "active"
-	fileDB.Encrypted = utils.Ptr(fileIn.Encrypted.Value)
-	if fileIn.UpdatedAt.IsSet() && !fileIn.UpdatedAt.Value.IsZero() {
-		fileDB.UpdatedAt = utils.Ptr(fileIn.UpdatedAt.Value)
-	} else {
-		fileDB.UpdatedAt = utils.Ptr(time.Now().UTC())
-	}
 
 	// Check for deduplication: if file is not encrypted and has a hash, look for existing file with same hash
-	if !*fileDB.Encrypted && fileDB.Hash != nil && *fileDB.Hash != "" && fileDB.Type == string(api.FileTypeFile) {
+	if !fileDB.IsEncrypted() && fileDB.Hash != nil && *fileDB.Hash != "" && fileDB.Type == string(api.FileTypeFile) {
 		existingFile, err := a.FindDeduplicateFile(ctx, userId, *fileDB.Hash)
 		if err != nil {
 			// Log error but don't fail the upload due to dedup check
@@ -591,7 +631,7 @@ func (a *apiService) FilesDelete(ctx context.Context, req *api.FileDelete) error
 	// Check for deduplication references before deletion
 	// If this file has a hash and there are other files with the same hash,
 	// log it for reference purposes (UI/client can be enhanced to show this info)
-	if fileDB.Hash != nil && *fileDB.Hash != "" && !*fileDB.Encrypted {
+	if fileDB.Hash != nil && *fileDB.Hash != "" && !fileDB.IsEncrypted() {
 		refCount, err := a.CountDedupReferences(ctx, fileDB.ID)
 		if err != nil {
 			logging.FromContext(ctx).Error("failed to count dedup references", zap.Error(err))
@@ -1202,34 +1242,32 @@ func (a *apiService) FilesUpdate(ctx context.Context, req *api.FileUpdate, param
 		}
 
 		// COPY-ON-WRITE: If content is being updated and this file is a reference to another file,
-		// break the dedup link by clearing ReferencedFileId (make this file its own canonical copy)
-		if isContentUpdate && currentFile.ReferencedFileId != nil && *currentFile.ReferencedFileId != "" {
-			updateDb.ReferencedFileId = utils.Ptr("") // Clear reference, make this file canonical
-		}
+		// break the dedup link so this file becomes its own canonical copy. The link is
+		// cleared separately below: referenced_file_id is a UUID column, so it can only
+		// be released by writing NULL, and gorm's struct update has no way to express
+		// that (a zero value is skipped, and a pointer to "" is not valid UUID input).
+		clearReference := isContentUpdate && currentFile.ReferencedFileId != nil && *currentFile.ReferencedFileId != ""
 
 		// Compute BLAKE3 tree hash if uploadId provided
-		if uploadId != "" && len(uploads) > 0 {
+		if blockHashesCover(uploads, req.Parts) {
 			var allBlockHashes []byte
 			for _, upload := range uploads {
 				allBlockHashes = append(allBlockHashes, upload.BlockHashes...)
 			}
 
-			if len(allBlockHashes) > 0 {
-				treeHashBytes := hash.ComputeTreeHash(allBlockHashes)
-				treeHash := hash.SumToHex(treeHashBytes)
-				updateDb.Hash = &treeHash
+			treeHash := hash.SumToHex(hash.ComputeTreeHash(allBlockHashes))
+			updateDb.Hash = &treeHash
 
-				// DEDUP CHECK: After updating content with new hash, check if it matches another file's hash
-				// If it does, we might be re-deduplicating with a different file (less common but possible)
-				newHash := hash.SumToHex(treeHashBytes)
-				existingFile, err := a.FindDeduplicateFile(ctx, currentFile.UserId, newHash)
-				if err != nil {
-					logging.FromContext(ctx).Error("dedup check on update failed", zap.Error(err))
-				}
-				if existingFile != nil && existingFile.ID != currentFile.ID {
-					// Found a duplicate with new hash: point this file to the canonical copy
-					updateDb.ReferencedFileId = utils.Ptr(existingFile.ID)
-				}
+			// DEDUP CHECK: After updating content with new hash, check if it matches another file's hash
+			// If it does, we might be re-deduplicating with a different file (less common but possible)
+			existingFile, err := a.FindDeduplicateFile(ctx, currentFile.UserId, treeHash)
+			if err != nil {
+				logging.FromContext(ctx).Error("dedup check on update failed", zap.Error(err))
+			}
+			if existingFile != nil && existingFile.ID != currentFile.ID {
+				// Found a duplicate with new hash: point this file to the canonical copy
+				updateDb.ReferencedFileId = utils.Ptr(existingFile.ID)
+				clearReference = false
 			}
 		}
 
@@ -1243,6 +1281,15 @@ func (a *apiService) FilesUpdate(ctx context.Context, req *api.FileUpdate, param
 			return query.Updates(updateDb).Error
 		}); err != nil {
 			return err
+		}
+
+		if clearReference {
+			if err := database.RetryTransientLock(ctx, database.DefaultLockRetryAttempts, func() error {
+				return tx.Model(&models.File{}).Where("id = ?", params.ID).
+					Update("referenced_file_id", nil).Error
+			}); err != nil {
+				return err
+			}
 		}
 
 		// Delete uploads after successful update

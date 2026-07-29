@@ -27,3 +27,12 @@ type File struct {
 	CreatedAt        *time.Time                     `gorm:"default:timezone('utc'::text, now())"`
 	UpdatedAt        *time.Time                     `gorm:"autoUpdateTime:false"`
 }
+
+// IsEncrypted reports whether the file is stored encrypted. Encrypted is a
+// nullable column, and a File is also read in-memory before it is persisted
+// (the dedup hash backfill hashes a file that has not been inserted yet), so
+// the pointer can legitimately be nil. Dereferencing it directly panics, so
+// every read of the flag goes through here.
+func (f *File) IsEncrypted() bool {
+	return f.Encrypted != nil && *f.Encrypted
+}
