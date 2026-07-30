@@ -273,7 +273,7 @@ func (a *apiService) UsersRemoveSession(ctx context.Context, params api.UsersRem
 	})
 
 	a.db.Where("user_id = ?", userId).Where("hash = ?", session.Hash).Delete(&models.Session{})
-	a.cache.Delete(ctx, cache.KeyUserSessions(userId))
+	a.cache.Delete(ctx, cache.KeyUserSessions(userId), cache.KeySessionUser(userId))
 
 	return nil
 }

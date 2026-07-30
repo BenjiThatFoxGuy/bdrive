@@ -23,6 +23,9 @@ max-open-connections = 25
 
 [files]
 enable-zip-download = true
+zip-max-files = 10000
+zip-max-size = 0
+zip-max-concurrent = 4
 
 [jwt]
 session-time = '30d'

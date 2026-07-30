@@ -95,6 +95,29 @@ func GetSessionByHash(ctx context.Context, db *gorm.DB, cache cache.Cacher, hash
 
 }
 
+// GetSessionByUserId returns the newest Telegram session belonging to userId.
+//
+// Share viewers never present the owner's credentials, so anything acting on a
+// share's behalf (streaming a file, building a zip) has no session of its own to
+// fall back on when the owner has no bots configured. Looking the owner's
+// session up by id is what makes those paths work on bot-less deployments.
+// The cacher parameter is deliberately not named "cache": that would shadow the
+// cache package and put its key helpers out of reach inside this function.
+func GetSessionByUserId(ctx context.Context, db *gorm.DB, cacher cache.Cacher, userId int64) (*models.Session, error) {
+	var session models.Session
+	key := cache.KeySessionUser(userId)
+
+	if err := cacher.Get(ctx, key, &session); err != nil {
+		if err := db.Model(&models.Session{}).Where("user_id = ?", userId).
+			Order("created_at desc").First(&session).Error; err != nil {
+			return nil, err
+		}
+		cacher.Set(ctx, key, &session, 0)
+	}
+
+	return &session, nil
+}
+
 type securityHandler struct {
 	db    *gorm.DB
 	cache cache.Cacher
