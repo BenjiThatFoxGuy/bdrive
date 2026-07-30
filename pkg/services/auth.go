@@ -125,6 +125,8 @@ func (a *apiService) AuthLogin(ctx context.Context, session *api.SessionCreate) 
 		Session: session.Session, SessionDate: auth.DateCreated}).Error; err != nil {
 		return nil, &apiError{err: err}
 	}
+	// A newer session supersedes whatever GetSessionByUserId last cached.
+	a.cache.Delete(ctx, cache.KeyUserSessions(session.UserId), cache.KeySessionUser(session.UserId))
 	return &api.AuthLoginNoContent{SetCookie: setCookie(authCookieName, jwtToken, int(a.cnf.JWT.SessionTime.Seconds()))}, nil
 }
 
@@ -137,7 +139,8 @@ func (a *apiService) AuthLogout(ctx context.Context) (*api.AuthLogoutNoContent, 
 	})
 	a.db.Where("hash = ?", authUser.Hash).Delete(&models.Session{})
 	userId, _ := strconv.ParseInt(authUser.Subject, 10, 64)
-	a.cache.Delete(ctx, cache.KeySessionHash(authUser.Hash), cache.KeyUserSessions(userId))
+	a.cache.Delete(ctx, cache.KeySessionHash(authUser.Hash), cache.KeyUserSessions(userId),
+		cache.KeySessionUser(userId))
 	return &api.AuthLogoutNoContent{SetCookie: setCookie(authCookieName, "", -1)}, nil
 }
 

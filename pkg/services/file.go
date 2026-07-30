@@ -792,6 +792,97 @@ func (a *apiService) buildRelativePath(db *gorm.DB, fileId string, rootFolderId 
 	return strings.Join(pathParts, "/"), nil
 }
 
+// pathWithinShare reports whether filePath is the shared node itself or lives
+// underneath it. Both paths come from getFullPath, so they're directly
+// comparable. A share rooted at "" covers the whole drive and matches anything.
+func pathWithinShare(sharePath, filePath string) bool {
+	sharePath = strings.TrimSuffix(sharePath, "/")
+	if sharePath == "" {
+		return true
+	}
+	return filePath == sharePath || strings.HasPrefix(filePath, sharePath+"/")
+}
+
+// checkZipLimits rejects an archive that's too large to be worth streaming,
+// before a single byte of the response has been written. Either limit is
+// disabled when zero.
+func checkZipLimits(files []models.File, maxFiles int, maxSize int64) error {
+	if maxFiles > 0 && len(files) > maxFiles {
+		return fmt.Errorf("zip download has %d files, limit is %d", len(files), maxFiles)
+	}
+	if maxSize > 0 {
+		var total int64
+		for i := range files {
+			if files[i].Size != nil {
+				total += *files[i].Size
+			}
+		}
+		if total > maxSize {
+			return fmt.Errorf("zip download is %d bytes, limit is %d", total, maxSize)
+		}
+	}
+	return nil
+}
+
+// zipCompressionMethod picks Store over Deflate for payloads that are already
+// compressed. Deflating them costs CPU for every byte and saves nothing.
+func zipCompressionMethod(name string) uint16 {
+	switch category.GetCategory(name) {
+	case category.Image, category.Video, category.Audio, category.Archive:
+		return zip.Store
+	default:
+		return zip.Deflate
+	}
+}
+
+// assertIdsWithinShare rejects any requested id that isn't covered by the share.
+// Without this a viewer could name any file id the share owner happens to own
+// and have it zipped for them, regardless of what was actually shared.
+func (a *apiService) assertIdsWithinShare(db *gorm.DB, share *fileShare, ids []string) error {
+	if share.Type == api.FileShareInfoTypeFile {
+		for _, id := range ids {
+			if id != share.FileId {
+				return &apiError{err: errors.New("file is not part of this share"), code: http.StatusForbidden}
+			}
+		}
+		return nil
+	}
+
+	notShared := &apiError{err: errors.New("file is not part of this share"), code: http.StatusForbidden}
+
+	for _, id := range ids {
+		// Resolve the file first. An id belonging to another user, or to nothing
+		// at all, gets the same answer as one outside the share — a viewer has no
+		// business learning which of those it was.
+		var file models.File
+		if err := db.Where("id = ? AND user_id = ?", id, share.UserId).First(&file).Error; err != nil {
+			if database.IsRecordNotFoundErr(err) {
+				return notShared
+			}
+			return &apiError{err: err}
+		}
+
+		path, err := a.getFullPath(db, id)
+		if err != nil {
+			return &apiError{err: err}
+		}
+		if !pathWithinShare(share.Path, path) {
+			return notShared
+		}
+	}
+	return nil
+}
+
+// shareZipName names the archive after the share itself. The owner-facing
+// getZipMetadata falls back to the parent folder's name, which would leak a
+// folder name from outside the share.
+func shareZipName(share *fileShare, ids []string) (string, bool) {
+	if len(ids) == 1 && ids[0] == share.FileId {
+		return fmt.Sprintf("%s.zip", share.Name), share.Type == api.FileShareInfoTypeFolder
+	}
+	return "download.zip", false
+}
+
 func (a *apiService) getZipMetadata(db *gorm.DB, ids []string, userId int64) (string, bool, error) {
 	if len(ids) != 1 {
 		return "download.zip", false, nil
@@ -830,6 +921,9 @@ func (a *apiService) FilesDownloadZip(ctx context.Context, req *api.FileZipDownl
 	if len(files) == 0 {
 		return nil, &apiError{err: errors.New("no files found"), code: 404}
 	}
+	if err := checkZipLimits(files, a.cnf.Files.ZipMaxFiles, a.cnf.Files.ZipMaxSize); err != nil {
+		return nil, &apiError{err: err, code: http.StatusRequestEntityTooLarge}
+	}
 
 	zipFilename, isSingleFolder, err := a.getZipMetadata(a.db, req.Ids, userId)
 	if err != nil {
@@ -857,6 +951,16 @@ func (a *apiService) SharesDownloadZip(ctx context.Context, req *api.FileZipDown
 	c := ctx.(*appcontext.Context)
 	share, err := a.validFileShare(c.Request, params.ID)
 	if err != nil {
+		// Let the browser put up its own password prompt, the same way a
+		// single-file share download does. The UI submits this request as a form
+		// navigation, so it has no way to set the header itself.
+		if errors.Is(err, ErrEmptyAuth) {
+			c.Writer.Header().Set("WWW-Authenticate", `Basic realm="Restricted"`)
+		}
+		return nil, err
+	}
+
+	if err := a.assertIdsWithinShare(a.db, share, req.Ids); err != nil {
 		return nil, err
 	}
 
@@ -867,13 +971,21 @@ func (a *apiService) SharesDownloadZip(ctx context.Context, req *api.FileZipDown
 	if len(files) == 0 {
 		return nil, &apiError{err: errors.New("no files found"), code: 404}
 	}
-
-	zipFilename, isSingleFolder, err := a.getZipMetadata(a.db, req.Ids, share.UserId)
-	if err != nil {
-		return nil, &apiError{err: err}
+	if err := checkZipLimits(files, a.cnf.Files.ZipMaxFiles, a.cnf.Files.ZipMaxSize); err != nil {
+		return nil, &apiError{err: err, code: http.StatusRequestEntityTooLarge}
 	}
 
-	pr, err := a.streamZip(ctx, share.UserId, "", files, req.Ids, isSingleFolder)
+	zipFilename, isSingleFolder := shareZipName(share, req.Ids)
+
+	// A share viewer never carries the owner's session, so fall back to the
+	// owner's own. Without this, zipping a share fails outright whenever the
+	// owner has no bots configured.
+	var ownerSession string
+	if session, err := auth.GetSessionByUserId(ctx, a.db, a.cache, share.UserId); err == nil {
+		ownerSession = session.Session
+	}
+
+	pr, err := a.streamZip(ctx, share.UserId, ownerSession, files, req.Ids, isSingleFolder)
 	if err != nil {
 		return nil, err
 	}
@@ -887,12 +999,36 @@ func (a *apiService) SharesDownloadZip(ctx context.Context, req *api.FileZipDown
 // streamZip resolves a Telegram client for userId (using tgSession as the
 // fallback session when the user has no bots configured) and streams files
 // into a zip archive, returning a reader that produces the archive as it's
-// written. tgSession may be empty when the caller doesn't have access to the
-// owning user's own session (e.g. a share viewer), in which case streaming
-// requires the user to have bots configured.
+// written. tgSession may be empty when neither bots nor a stored session could
+// be found for the owning user, in which case streaming isn't possible.
 // isSingleFolder indicates if we're downloading a single folder, in which case
 // the folder name will be included in the zip paths.
 func (a *apiService) streamZip(ctx context.Context, userId int64, tgSession string, files []models.File, selectedIds []string, isSingleFolder bool) (io.Reader, error) {
+	// Each archive holds a Telegram client for as long as it takes to stream,
+	// which can be the full write timeout. Turn away the excess rather than
+	// queueing it: a request that blocks here occupies a connection anyway.
+	if a.zipSlots != nil {
+		select {
+		case a.zipSlots <- struct{}{}:
+		default:
+			return nil, &apiError{err: errors.New("too many zip downloads in progress, try again shortly"),
+				code: http.StatusServiceUnavailable}
+		}
+	}
+	releaseSlot := func() {
+		if a.zipSlots != nil {
+			<-a.zipSlots
+		}
+	}
+	// The slot belongs to the streaming goroutine once it starts; until then any
+	// error return has to give it back.
+	handedOff := false
+	defer func() {
+		if !handedOff {
+			releaseSlot()
+		}
+	}()
+
 	tokens, err := a.channelManager.BotTokens(ctx, userId)
 	if err != nil {
 		return nil, &apiError{err: err}
@@ -930,8 +1066,10 @@ func (a *apiService) streamZip(ctx context.Context, userId int64, tgSession stri
 	}
 
 	pr, pw := io.Pipe()
+	handedOff = true
 
 	go func() {
+		defer releaseSlot()
 		zw := zip.NewWriter(pw)
 		logger := logging.Component("FILE").With(zap.Int64("user_id", userId))
 
@@ -993,7 +1131,10 @@ func (a *apiService) streamZip(ctx context.Context, userId int64, tgSession stri
 					return err
 				}
 
-				zf, err := zw.Create(name)
+				zf, err := zw.CreateHeader(&zip.FileHeader{
+					Name:   name,
+					Method: zipCompressionMethod(name),
+				})
 				if err != nil {
 					lr.Close()
 					return err
@@ -1008,10 +1149,15 @@ func (a *apiService) streamZip(ctx context.Context, userId int64, tgSession stri
 			return nil
 		})
 
+		// Only finish the archive when every file made it. Closing the writer
+		// after a failure would emit a central directory covering whatever was
+		// written, handing the client a well-formed zip that's silently missing
+		// files — and the 200 status went out before the first Telegram read, so
+		// that's the only signal it would get. Leaving it unterminated makes the
+		// download unambiguously broken instead.
 		if err != nil {
 			logger.Error("zip.stream_failed", zap.Error(err))
-		}
-		if cerr := zw.Close(); cerr != nil && err == nil {
+		} else if cerr := zw.Close(); cerr != nil {
 			err = cerr
 		}
 		pw.CloseWithError(err)
@@ -1361,7 +1507,13 @@ func (e *extendedService) FilesStream(w http.ResponseWriter, r *http.Request, fi
 			}
 		}
 	} else {
+		// Share path: the viewer has no credentials of their own, so fall back to
+		// the owner's session. Leaving Session empty here means AuthClient gets an
+		// empty session string and fails outright once the owner has no bots.
 		session = &models.Session{UserId: userId}
+		if owner, err := auth.GetSessionByUserId(ctx, e.api.db, e.api.cache, userId); err == nil {
+			session.Session = owner.Session
+		}
 	}
 
 	file, err := cache.Fetch(ctx, e.api.cache, cache.Key("files", fileId), 0, func() (*models.File, error) {

@@ -34,6 +34,9 @@ type apiService struct {
 	events         events.EventBroadcaster
 	channelManager *tgc.ChannelManager
 	dedup          *dedupManager
+	// zipSlots caps how many archives stream at once. nil when the limit is
+	// disabled.
+	zipSlots chan struct{}
 }
 
 func (a *apiService) newMiddlewares(ctx context.Context, retries int) []telegram.Middleware {
@@ -182,6 +185,11 @@ func NewApiService(db *gorm.DB,
 	botSelector tgc.BotSelector,
 	events events.EventBroadcaster) *apiService {
 
+	var zipSlots chan struct{}
+	if limit := cnf.Files.ZipMaxConcurrent; limit > 0 {
+		zipSlots = make(chan struct{}, limit)
+	}
+
 	return &apiService{
 		db:             db,
 		cnf:            cnf,
@@ -190,6 +198,7 @@ func NewApiService(db *gorm.DB,
 		events:         events,
 		channelManager: tgc.NewChannelManager(db, cache, &cnf.TG),
 		dedup:          newDedupManager(),
+		zipSlots:       zipSlots,
 	}
 }
 

@@ -35,6 +35,13 @@ func KeySessionHash(hash string) string {
 	return Key("sessions", hash)
 }
 
+// KeySessionUser caches a user's own Telegram session, looked up by id rather
+// than by hash. Distinct from KeyUserSessions, which holds the session list
+// shown in the UI.
+func KeySessionUser(userID int64) string {
+	return Key("sessions", "user", userID)
+}
+
 func KeySessionToken(instance, token string) string {
 	return Key("sessions", instance, token)
 }

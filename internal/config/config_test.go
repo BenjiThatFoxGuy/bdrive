@@ -59,6 +59,9 @@ func TestConfigLoader_LoadDefaults(t *testing.T) {
 	assert.Equal(t, 2*time.Hour, cfg.CronJobs.FolderSizeInterval)
 	assert.Equal(t, true, cfg.TG.RateLimit)
 	assert.Equal(t, true, cfg.Files.EnableZipDownload)
+	assert.Equal(t, 10000, cfg.Files.ZipMaxFiles)
+	assert.Equal(t, int64(0), cfg.Files.ZipMaxSize)
+	assert.Equal(t, 4, cfg.Files.ZipMaxConcurrent)
 	assert.Equal(t, 5, cfg.TG.RateBurst)
 	assert.Equal(t, 100, cfg.TG.Rate)
 	assert.Equal(t, 5*time.Minute, cfg.TG.ReconnectTimeout)
@@ -159,6 +162,59 @@ enable-zip-download = false
 	require.NoError(t, err)
 
 	assert.Equal(t, false, cfg.Files.EnableZipDownload)
+}
+
+func TestConfigLoader_FilesZipLimits(t *testing.T) {
+	t.Run("from config file", func(t *testing.T) {
+		loader := NewConfigLoader()
+		var cfg ServerCmdConfig
+
+		configPath := filepath.Join(t.TempDir(), "config.toml")
+		configContent := `
+[files]
+zip-max-files = 25
+zip-max-size = 1073741824
+zip-max-concurrent = 0
+`
+		require.NoError(t, os.WriteFile(configPath, []byte(configContent), 0644))
+
+		cmd := &cobra.Command{Use: "test"}
+		loader.RegisterFlags(cmd.Flags(), reflect.TypeFor[ServerCmdConfig]())
+		require.NoError(t, cmd.Flags().Set("config", configPath))
+
+		require.NoError(t, loader.Load(cmd, &cfg))
+
+		assert.Equal(t, 25, cfg.Files.ZipMaxFiles)
+		assert.Equal(t, int64(1073741824), cfg.Files.ZipMaxSize)
+		assert.Equal(t, 0, cfg.Files.ZipMaxConcurrent)
+		// Untouched keys keep their defaults.
+		assert.Equal(t, true, cfg.Files.EnableZipDownload)
+	})
+
+	t.Run("from env", func(t *testing.T) {
+		loader := NewConfigLoader()
+		var cfg ServerCmdConfig
+		cmd := &cobra.Command{Use: "test"}
+		loader.RegisterFlags(cmd.Flags(), reflect.TypeFor[ServerCmdConfig]())
+
+		require.NoError(t, os.Setenv("TELDRIVE_FILES_ZIP_MAX_FILES", "7"))
+		defer func() { os.Unsetenv("TELDRIVE_FILES_ZIP_MAX_FILES") }()
+
+		require.NoError(t, loader.Load(cmd, &cfg))
+		assert.Equal(t, 7, cfg.Files.ZipMaxFiles)
+	})
+
+	t.Run("from flag", func(t *testing.T) {
+		loader := NewConfigLoader()
+		var cfg ServerCmdConfig
+		cmd := &cobra.Command{Use: "test"}
+		loader.RegisterFlags(cmd.Flags(), reflect.TypeFor[ServerCmdConfig]())
+
+		require.NoError(t, cmd.Flags().Set("files-zip-max-concurrent", "2"))
+
+		require.NoError(t, loader.Load(cmd, &cfg))
+		assert.Equal(t, 2, cfg.Files.ZipMaxConcurrent)
+	})
 }
 
 func TestConfigLoader_CommandLineFlags(t *testing.T) {
