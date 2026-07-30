@@ -394,8 +394,11 @@ func (a *apiService) FilesCreate(ctx context.Context, fileIn *api.File) (*api.Fi
 		// recorded during upload, which are what makes the tree hash below cheap.
 		if fileIn.UploadId.Value != "" {
 			uploadId = fileIn.UploadId.Value
-			// Fetch parts from uploads table
-			if err := a.db.Where("upload_id = ?", uploadId).Order("part_no").Find(&uploads).Error; err != nil {
+			// Fetch parts from uploads table. Scoped to the caller: upload_id is a
+			// client-computed value, so an unscoped lookup would let anyone who
+			// supplies someone else's id commit their parts - and their block
+			// hashes - into a file of their own.
+			if err := a.db.Where("upload_id = ? AND user_id = ?", uploadId, userId).Order("part_no").Find(&uploads).Error; err != nil {
 				return nil, &apiError{err: err}
 			}
 
@@ -526,7 +529,7 @@ func (a *apiService) FilesCreate(ctx context.Context, fileIn *api.File) (*api.Fi
 
 		// Delete uploads after successful file creation
 		if uploadId != "" {
-			if err := tx.Where("upload_id = ?", uploadId).Delete(&models.Upload{}).Error; err != nil {
+			if err := tx.Where("upload_id = ? AND user_id = ?", uploadId, userId).Delete(&models.Upload{}).Error; err != nil {
 				return err
 			}
 		}
@@ -1322,7 +1325,8 @@ func (a *apiService) FilesUpdate(ctx context.Context, req *api.FileUpdate, param
 
 	if req.UploadId.IsSet() && req.UploadId.Value != "" {
 		uploadId = req.UploadId.Value
-		if err := a.db.Where("upload_id = ?", uploadId).Order("part_no").Find(&uploads).Error; err != nil {
+		// Scoped to the caller - see the matching lookup in FilesCreate.
+		if err := a.db.Where("upload_id = ? AND user_id = ?", uploadId, userId).Order("part_no").Find(&uploads).Error; err != nil {
 			return nil, &apiError{err: err}
 		}
 		var totalSize int64
@@ -1440,7 +1444,7 @@ func (a *apiService) FilesUpdate(ctx context.Context, req *api.FileUpdate, param
 
 		// Delete uploads after successful update
 		if uploadId != "" {
-			if err := tx.Where("upload_id = ?", uploadId).Delete(&models.Upload{}).Error; err != nil {
+			if err := tx.Where("upload_id = ? AND user_id = ?", uploadId, userId).Delete(&models.Upload{}).Error; err != nil {
 				return err
 			}
 		}

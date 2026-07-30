@@ -36,15 +36,23 @@ var (
 )
 
 func (a *apiService) UploadsDelete(ctx context.Context, params api.UploadsDeleteParams) error {
-	if err := a.db.Where("upload_id = ?", params.ID).Delete(&models.Upload{}).Error; err != nil {
+	userId := auth.GetUser(ctx)
+	// Scoped to the caller: the upload id is chosen by the client, so without this
+	// anyone could delete another user's in-progress upload by naming its id.
+	if err := a.db.Where("upload_id = ? AND user_id = ?", params.ID, userId).Delete(&models.Upload{}).Error; err != nil {
 		return &api.ErrorStatusCode{StatusCode: 500, Response: api.Error{Message: err.Error(), Code: 500}}
 	}
 	return nil
 }
 
 func (a *apiService) UploadsPartsById(ctx context.Context, params api.UploadsPartsByIdParams) ([]api.UploadPart, error) {
+	userId := auth.GetUser(ctx)
 	parts := []models.Upload{}
-	if err := a.db.Model(&models.Upload{}).Order("part_no").Where("upload_id = ?", params.ID).
+	// Scoped to the caller: the upload id is chosen by the client, so without this
+	// anyone could read another user's part ids, channel ids and salts. An id that
+	// belongs to someone else returns an empty list, exactly as an unknown id does,
+	// so the response never reveals whether an upload id is in use.
+	if err := a.db.Model(&models.Upload{}).Order("part_no").Where("upload_id = ? AND user_id = ?", params.ID, userId).
 		Where("created_at < ?", time.Now().UTC().Add(a.cnf.TG.Uploads.Retention)).
 		Find(&parts).Error; err != nil {
 		return nil, &apiError{err: err}
