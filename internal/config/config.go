@@ -49,16 +49,17 @@ type EventConfig struct {
 }
 
 type ServerCmdConfig struct {
-	Server   ServerConfig
-	Log      LoggingConfig
-	JWT      JWTConfig
-	DB       DBConfig
-	TG       TGConfig
-	CronJobs CronJobConfig
-	Cache    CacheConfig
-	Redis    RedisConfig
-	Events   EventConfig
-	Files    FilesConfig
+	Server     ServerConfig
+	Log        LoggingConfig
+	JWT        JWTConfig
+	DB         DBConfig
+	TG         TGConfig
+	CronJobs   CronJobConfig
+	Cache      CacheConfig
+	Redis      RedisConfig
+	Events     EventConfig
+	Files      FilesConfig
+	Shortlinks ShortlinkConfig
 }
 
 type CheckCmdConfig struct {
@@ -88,6 +89,7 @@ type ServerConfig struct {
 	EnablePprof      bool          `default:"false" description:"Enable pprof debugging endpoints"`
 	ReadTimeout      time.Duration `default:"1h" description:"Maximum duration for reading entire request"`
 	WriteTimeout     time.Duration `default:"1h" description:"Maximum duration for writing response"`
+	BaseURL          string        `default:"" description:"Fully-qualified base URL of the main app (e.g. https://drive.example.com), used to build absolute redirect targets from the shortlink resolver listener. Required when shortlinks.enabled is true."`
 }
 
 type FilesConfig struct {
@@ -95,6 +97,12 @@ type FilesConfig struct {
 	ZipMaxFiles       int   `default:"10000" description:"Maximum files in a single zip download (0 disables the limit)"`
 	ZipMaxSize        int64 `default:"0" description:"Maximum total uncompressed bytes in a single zip download (0 disables the limit)"`
 	ZipMaxConcurrent  int   `default:"4" description:"Maximum zip downloads streaming concurrently (0 disables the limit)"`
+}
+
+type ShortlinkConfig struct {
+	Enabled    bool   `default:"false" description:"Enable the standalone shortlink resolver listener for a branded short-link domain (bare /{code} paths, fronted by your own reverse proxy)"`
+	ListenAddr string `default:":8081" description:"Address the shortlink resolver listens on when enabled"`
+	CodeLength int    `default:"7" description:"Length of auto-generated shortlink codes"`
 }
 
 type CacheConfig struct {

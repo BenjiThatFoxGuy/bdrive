@@ -36,11 +36,17 @@ log:
   level: "info"
 
 server:
+  base-url: ""
   enable-pprof: false
   graceful-shutdown: "10s"
   port: 8080
   read-timeout: "1h"
   write-timeout: "1h"
+
+shortlinks:
+  enabled: false
+  listen-addr: ":8081"
+  code-length: 7
 
 tg:
   app-hash: "8da85b0d5bfe62527e5b244c209159c3"

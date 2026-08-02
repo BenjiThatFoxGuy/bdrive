@@ -573,7 +573,47 @@ func (a *apiService) FilesCreateShare(ctx context.Context, req *api.FileShareCre
 	}
 	fileShare.UserId = userId
 
+	blockDirectLink := req.BlockDirectLink.Or(false)
+	alwaysDirectLink := req.AlwaysDirectLink.Or(false)
+	if blockDirectLink && alwaysDirectLink {
+		alwaysDirectLink = false // block wins when both are requested at once
+	}
+	fileShare.BlockDirectLink = blockDirectLink
+	fileShare.AlwaysDirectLink = alwaysDirectLink
+	fileShare.AllowZipDownload = req.AllowZipDownload.Or(false)
+
+	if req.ShortCode.IsSet() && req.ShortCode.Value == "" {
+		// Auto-generate: retry on a unique-constraint conflict rather than
+		// pre-checking availability, to avoid a check-then-insert race.
+		for attempt := 0; attempt < shortCodeGenRetries; attempt++ {
+			code, err := generateShortCode(a.cnf.Shortlinks.CodeLength)
+			if err != nil {
+				return &apiError{err: err}
+			}
+			fileShare.ShortCode = &code
+			if err := a.db.Create(&fileShare).Error; err != nil {
+				if database.IsKeyConflictErr(err) {
+					continue
+				}
+				return &apiError{err: err}
+			}
+			return nil
+		}
+		return &apiError{err: errors.New("failed to generate a unique shortlink code")}
+	}
+
+	if req.ShortCode.IsSet() {
+		code := req.ShortCode.Value
+		if err := validateShortCode(code); err != nil {
+			return &apiError{err: err, code: http.StatusBadRequest}
+		}
+		fileShare.ShortCode = &code
+	}
+
 	if err := a.db.Create(&fileShare).Error; err != nil {
+		if database.IsKeyConflictErr(err) {
+			return &apiError{err: ErrShortCodeTaken, code: http.StatusConflict}
+		}
 		return &apiError{err: err}
 	}
 
@@ -685,31 +725,143 @@ func (a *apiService) FilesDeleteShare(ctx context.Context, params api.FilesDelet
 		return &apiError{err: err}
 	}
 	if deletedShare.ID != "" {
-		a.cache.Delete(ctx, cache.KeyShare(deletedShare.ID))
+		keys := []string{cache.KeyShare(deletedShare.ID)}
+		if deletedShare.ShortCode != nil {
+			keys = append(keys, cache.KeyShare(*deletedShare.ShortCode))
+		}
+		a.cache.Delete(ctx, keys...)
 	}
 
 	return nil
 }
 
+// FilesEditShare reads the share first (rather than a blind
+// Where(...).Updates(...)) for two reasons: it needs the *pre-update* id and
+// short code to invalidate the right cache entries below, and it needs the
+// existing toggle values to re-normalize the mutually-exclusive
+// block/always pair when only one side of the pair is present in the
+// request. Edits are applied via a map, not a struct, because GORM's
+// struct-based Updates silently skips zero-value fields (false, nil) —
+// which would make it impossible to ever turn a toggle back off or clear a
+// short code.
 func (a *apiService) FilesEditShare(ctx context.Context, req *api.FileShareCreate, params api.FilesEditShareParams) error {
 	userId := auth.GetUser(ctx)
 
-	var fileShareUpdate models.FileShare
+	var existing models.FileShare
+	if err := a.db.Where("file_id = ?", params.ID).Where("user_id = ?", userId).First(&existing).Error; err != nil {
+		if database.IsRecordNotFoundErr(err) {
+			return &apiError{err: database.ErrNotFound, code: http.StatusNotFound}
+		}
+		return &apiError{err: err}
+	}
+
+	updates := map[string]any{}
 
 	if req.Password.Value != "" {
-		bytes, err := bcrypt.GenerateFromPassword([]byte(req.Password.Value), bcrypt.MinCost)
+		hash, err := bcrypt.GenerateFromPassword([]byte(req.Password.Value), bcrypt.MinCost)
 		if err != nil {
 			return &apiError{err: err}
 		}
-		fileShareUpdate.Password = utils.Ptr(string(bytes))
+		updates["password"] = string(hash)
 	}
 	if req.ExpiresAt.IsSet() {
-		fileShareUpdate.ExpiresAt = utils.Ptr(req.ExpiresAt.Value)
+		updates["expires_at"] = req.ExpiresAt.Value
 	}
 
-	if err := a.db.Model(&models.FileShare{}).Where("file_id = ?", params.ID).Where("user_id = ?", userId).
-		Updates(fileShareUpdate).Error; err != nil {
-		return &apiError{err: err}
+	blockDirectLink, alwaysDirectLink := existing.BlockDirectLink, existing.AlwaysDirectLink
+	if req.BlockDirectLink.IsSet() {
+		blockDirectLink = req.BlockDirectLink.Value
+	}
+	if req.AlwaysDirectLink.IsSet() {
+		alwaysDirectLink = req.AlwaysDirectLink.Value
+	}
+	if blockDirectLink && alwaysDirectLink {
+		alwaysDirectLink = false // block wins when both are requested at once
+	}
+	if req.BlockDirectLink.IsSet() || req.AlwaysDirectLink.IsSet() {
+		updates["block_direct_link"] = blockDirectLink
+		updates["always_direct_link"] = alwaysDirectLink
+	}
+	if req.AllowZipDownload.IsSet() {
+		updates["allow_zip_download"] = req.AllowZipDownload.Value
+	}
+
+	clearCode := req.ClearShortCode.Or(false)
+	if clearCode {
+		updates["short_code"] = nil
+		updates["block_direct_link"] = false
+		updates["always_direct_link"] = false
+		updates["allow_zip_download"] = false
+	}
+
+	// applyUpdate runs the actual UPDATE, optionally pinning short_code to
+	// code. It's called more than once only when auto-generating a code and
+	// retrying past a unique-constraint conflict.
+	applyUpdate := func(code *string) error {
+		u := make(map[string]any, len(updates)+1)
+		for k, v := range updates {
+			u[k] = v
+		}
+		if code != nil {
+			u["short_code"] = *code
+		}
+		if len(u) == 0 {
+			return nil
+		}
+		return a.db.Model(&models.FileShare{}).Where("id = ?", existing.ID).Updates(u).Error
+	}
+
+	var newCode *string
+
+	switch {
+	case clearCode:
+		if err := applyUpdate(nil); err != nil {
+			return &apiError{err: err}
+		}
+	case req.ShortCode.IsSet() && req.ShortCode.Value == "":
+		var assigned string
+		for attempt := 0; attempt < shortCodeGenRetries; attempt++ {
+			gen, err := generateShortCode(a.cnf.Shortlinks.CodeLength)
+			if err != nil {
+				return &apiError{err: err}
+			}
+			if err := applyUpdate(&gen); err != nil {
+				if database.IsKeyConflictErr(err) {
+					continue
+				}
+				return &apiError{err: err}
+			}
+			assigned = gen
+			break
+		}
+		if assigned == "" {
+			return &apiError{err: errors.New("failed to generate a unique shortlink code")}
+		}
+		newCode = &assigned
+	case req.ShortCode.IsSet():
+		code := req.ShortCode.Value
+		if err := validateShortCode(code); err != nil {
+			return &apiError{err: err, code: http.StatusBadRequest}
+		}
+		if err := applyUpdate(&code); err != nil {
+			if database.IsKeyConflictErr(err) {
+				return &apiError{err: ErrShortCodeTaken, code: http.StatusConflict}
+			}
+			return &apiError{err: err}
+		}
+		newCode = &code
+	default:
+		if err := applyUpdate(nil); err != nil {
+			return &apiError{err: err}
+		}
+	}
+
+	a.cache.Delete(ctx, cache.KeyShare(existing.ID))
+	if existing.ShortCode != nil {
+		a.cache.Delete(ctx, cache.KeyShare(*existing.ShortCode))
+	}
+	if newCode != nil {
+		a.cache.Delete(ctx, cache.KeyShare(*newCode))
 	}
 
 	return nil
@@ -963,6 +1115,10 @@ func (a *apiService) SharesDownloadZip(ctx context.Context, req *api.FileZipDown
 		return nil, err
 	}
 
+	if share.Type == api.FileShareInfoTypeFolder && !share.AllowZipDownload {
+		return nil, &apiError{err: errors.New("zip download is not allowed for this share"), code: http.StatusForbidden}
+	}
+
 	if err := a.assertIdsWithinShare(a.db, share, req.Ids); err != nil {
 		return nil, err
 	}
@@ -996,6 +1152,60 @@ func (a *apiService) SharesDownloadZip(ctx context.Context, req *api.FileZipDown
 	return &api.SharesDownloadZipOKHeaders{
 		ContentDisposition: mime.FormatMediaType("attachment", map[string]string{"filename": zipFilename}),
 		Response:           api.SharesDownloadZipOK{Data: pr},
+	}, nil
+}
+
+// SharesDownloadZipDirect is the body-less GET counterpart to
+// SharesDownloadZip: it implies "zip the whole share" (no explicit file ids
+// to validate), so it can be the target of a redirect — a 302 can't carry a
+// POST body. This is what the shortlink resolver redirects to for a
+// folder-type shortlink with AllowZipDownload enabled.
+func (a *apiService) SharesDownloadZipDirect(ctx context.Context, params api.SharesDownloadZipDirectParams) (*api.SharesDownloadZipDirectOKHeaders, error) {
+	if !a.cnf.Files.EnableZipDownload {
+		return nil, &apiError{err: errors.New("zip download is disabled"), code: http.StatusForbidden}
+	}
+
+	c := ctx.(*appcontext.Context)
+	share, err := a.validFileShare(c.Request, params.ID)
+	if err != nil {
+		if errors.Is(err, ErrEmptyAuth) {
+			c.Writer.Header().Set("WWW-Authenticate", `Basic realm="Restricted"`)
+		}
+		return nil, err
+	}
+
+	if share.Type == api.FileShareInfoTypeFolder && !share.AllowZipDownload {
+		return nil, &apiError{err: errors.New("zip download is not allowed for this share"), code: http.StatusForbidden}
+	}
+
+	ids := []string{share.FileId}
+
+	files, err := a.collectFilesRecursive(a.db, ids, share.UserId)
+	if err != nil {
+		return nil, &apiError{err: err}
+	}
+	if len(files) == 0 {
+		return nil, &apiError{err: errors.New("no files found"), code: 404}
+	}
+	if err := checkZipLimits(files, a.cnf.Files.ZipMaxFiles, a.cnf.Files.ZipMaxSize); err != nil {
+		return nil, &apiError{err: err, code: http.StatusRequestEntityTooLarge}
+	}
+
+	zipFilename, isSingleFolder := shareZipName(share, ids)
+
+	var ownerSession string
+	if session, err := auth.GetSessionByUserId(ctx, a.db, a.cache, share.UserId); err == nil {
+		ownerSession = session.Session
+	}
+
+	pr, err := a.streamZip(ctx, share.UserId, ownerSession, files, ids, isSingleFolder)
+	if err != nil {
+		return nil, err
+	}
+
+	return &api.SharesDownloadZipDirectOKHeaders{
+		ContentDisposition: mime.FormatMediaType("attachment", map[string]string{"filename": zipFilename}),
+		Response:           api.SharesDownloadZipDirectOK{Data: pr},
 	}, nil
 }
 
@@ -1288,10 +1498,16 @@ func (a *apiService) FilesMove(ctx context.Context, req *api.FileMove) error {
 
 func (a *apiService) FilesShareByid(ctx context.Context, params api.FilesShareByidParams) (*api.FileShare, error) {
 	userId := auth.GetUser(ctx)
-	var result []models.FileShare
+	var result []struct {
+		models.FileShare
+		Type api.FileShareInfoType `gorm:"column:type"`
+		Name string                `gorm:"column:name"`
+	}
 
 	notFoundErr := &apiError{err: errors.New("invalid share"), code: 404}
-	if err := a.db.Model(&models.FileShare{}).Where("file_id = ?", params.ID).Where("user_id = ?", userId).
+	if err := a.db.Model(&models.FileShare{}).Where("file_shares.file_id = ?", params.ID).Where("file_shares.user_id = ?", userId).
+		Select("file_shares.*", "f.type", "f.name").
+		Joins("left join teldrive.files as f on f.id = file_shares.file_id").
 		Find(&result).Error; err != nil {
 		if database.IsRecordNotFoundErr(err) {
 			return nil, notFoundErr
@@ -1302,16 +1518,33 @@ func (a *apiService) FilesShareByid(ctx context.Context, params api.FilesShareBy
 	if len(result) == 0 {
 		return nil, notFoundErr
 	}
+	share := result[0]
 	res := &api.FileShare{
-		ID: result[0].ID,
+		ID:   share.ID,
+		Type: api.FileShareType(share.Type),
+		Name: share.Name,
 	}
-	if result[0].Password != nil {
+	if share.Password != nil {
 		res.Protected = true
 	}
-	if result[0].ExpiresAt != nil {
-		res.ExpiresAt = api.NewOptDateTime(*result[0].ExpiresAt)
+	if share.ExpiresAt != nil {
+		res.ExpiresAt = api.NewOptDateTime(*share.ExpiresAt)
 	}
+	if share.ShortCode != nil {
+		res.ShortCode = api.NewOptString(*share.ShortCode)
+	}
+	res.BlockDirectLink = api.NewOptBool(share.BlockDirectLink)
+	res.AlwaysDirectLink = api.NewOptBool(share.AlwaysDirectLink)
+	res.AllowZipDownload = api.NewOptBool(share.AllowZipDownload)
 	return res, nil
+}
+
+func (a *apiService) FilesSuggestShareCode(ctx context.Context, params api.FilesSuggestShareCodeParams) (*api.ShortCodeSuggestion, error) {
+	code, err := a.suggestUniqueShortCode(a.cnf.Shortlinks.CodeLength)
+	if err != nil {
+		return nil, &apiError{err: err}
+	}
+	return &api.ShortCodeSuggestion{Code: code}, nil
 }
 
 func (a *apiService) FilesUpdate(ctx context.Context, req *api.FileUpdate, params api.FilesUpdateParams) (*api.File, error) {
