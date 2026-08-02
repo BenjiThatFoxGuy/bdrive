@@ -53,7 +53,10 @@ func (a *apiService) VersionVersion(ctx context.Context) (*api.ApiVersion, error
 }
 
 func (a *apiService) ConfigConfig(ctx context.Context) (*api.ServerConfig, error) {
-	return &api.ServerConfig{ZipDownloadEnabled: a.cnf.Files.EnableZipDownload}, nil
+	return &api.ServerConfig{
+		ZipDownloadEnabled: a.cnf.Files.EnableZipDownload,
+		ShortlinksEnabled:  a.cnf.Shortlinks.Enabled,
+	}, nil
 }
 
 func (a *apiService) EventsGetEvents(ctx context.Context) ([]api.Event, error) {
