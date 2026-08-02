@@ -35,9 +35,20 @@ const (
 	// than the wider set validateShortCode accepts for custom codes: a random
 	// code with dots or dashes scattered through it reads as broken, not
 	// stylish.
-	shortCodeAlphabet   = "23456789abcdefghijkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ"
-	shortCodeMinLength  = 4
-	shortCodeMaxLength  = 32
+	shortCodeAlphabet = "23456789abcdefghijkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ"
+	// shortCodeMinLength has nothing to do with uuid safety (see
+	// shortCodePattern and the isUUID check in validateShortCode below) - it's
+	// just a floor under how short a "shortlink" is useful.
+	shortCodeMinLength = 4
+	// shortCodeMaxLength used to be the thing standing between a custom code
+	// and uuid-format ambiguity (32 < a real uuid's 36 characters), which
+	// ruled out a whole class of legitimate codes along with it - notably a
+	// file's own name used as its shortlink, which routinely runs longer than
+	// that. Now that validateShortCode rejects a uuid-shaped code directly
+	// and precisely, the length only needs to be a generous sanity bound: 255
+	// matches the max filename length on most filesystems, so any real
+	// filename fits without truncation.
+	shortCodeMaxLength  = 255
 	shortCodeGenRetries = 5
 )
 
@@ -46,9 +57,7 @@ const (
 // be alphanumeric. That's not just cosmetic: a code ending in "." is exactly
 // the kind of thing some chat apps and link-preview bots trim as trailing
 // punctuation when auto-linking a pasted URL, silently truncating the code
-// the visitor actually needs. A code doesn't need format-ambiguity
-// protection against a canonical uuid the way the old alphanumeric-only rule
-// implied - the 32-char max already rules that out, since a real uuid is 36.
+// the visitor actually needs.
 var shortCodePattern = regexp.MustCompile(`^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$`)
 
 // reservedShortCodes blocks custom slugs that would be confusing or collide
@@ -65,6 +74,14 @@ func validateShortCode(code string) error {
 	}
 	if !shortCodePattern.MatchString(code) {
 		return fmt.Errorf("%w: only letters, numbers, dots, dashes and underscores are allowed, and it must start and end with a letter or number", ErrShortCodeInvalid)
+	}
+	// shareGetById (pkg/services/share.go) decides whether an incoming id is a
+	// canonical uuid or a shortlink code by trying to parse it as a uuid
+	// first. A custom code that itself happens to be valid uuid syntax would
+	// route to the wrong lookup and never resolve - reject it outright rather
+	// than let someone create a shortlink that can never work.
+	if isUUID(code) {
+		return fmt.Errorf("%w: can't be a uuid", ErrShortCodeInvalid)
 	}
 	if reservedShortCodes[strings.ToLower(code)] {
 		return fmt.Errorf("%w: this code is reserved", ErrShortCodeInvalid)
