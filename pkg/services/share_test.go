@@ -19,9 +19,21 @@ func TestValidateShortCode(t *testing.T) {
 		{name: "mixed separators", code: "v2.1-beta_final", wantErr: false},
 		{name: "minimum length", code: "abcd", wantErr: false},
 		{name: "maximum length", code: strings.Repeat("a", shortCodeMaxLength), wantErr: false},
+		{
+			name:    "a realistic long filename, well past the old 32-char cap",
+			code:    "IMG_20260802_Family-Vacation_Beach-Sunset-Photo.jpg",
+			wantErr: false,
+		},
+		{
+			name:    "36 characters but not uuid-shaped is still fine",
+			code:    strings.Repeat("a", 36),
+			wantErr: false,
+		},
 
 		{name: "too short", code: "abc", wantErr: true},
 		{name: "too long", code: strings.Repeat("a", shortCodeMaxLength+1), wantErr: true},
+		{name: "a real uuid is rejected regardless of length", code: "123e4567-e89b-12d3-a456-426614174000", wantErr: true},
+		{name: "uppercase uuid is rejected too", code: "123E4567-E89B-12D3-A456-426614174000", wantErr: true},
 		{name: "leading dot", code: ".myfile", wantErr: true},
 		{name: "trailing dot", code: "myfile.", wantErr: true},
 		{name: "leading dash", code: "-myfile", wantErr: true},
