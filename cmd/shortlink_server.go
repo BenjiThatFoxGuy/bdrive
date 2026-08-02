@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -15,11 +16,50 @@ import (
 	"go.uber.org/zap"
 )
 
-// targetPathKey stashes the resolved upstream path on the request context so
-// the shared reverseProxy's Rewrite func can read it - the target path is
-// per-request (which file, which share), but the proxy itself is built once
-// so it reuses connections to the upstream instead of dialing fresh per hit.
-type targetPathKey struct{}
+// requestContextKey stashes per-request data the shared reverseProxy's
+// Rewrite and ModifyResponse funcs need to read: the target path is
+// per-request (which file, which share), and cacheable records whether the
+// resolved share is password-protected, decided once at resolution time so
+// neither hook has to re-derive it.
+type requestContextKey struct{}
+
+type proxyRequestInfo struct {
+	path      string
+	cacheable bool
+}
+
+// cacheHeaders sets long-TTL, publicly-cacheable response headers for a
+// direct-download or zip response, aimed at a CDN sitting in front of the
+// alt domain (and the visitor's own browser) so a popular share's repeat
+// requests don't all hit the origin.
+//
+// Cache-Control is the standard directive browsers and any generic shared
+// cache honor. CDN-Cache-Control (a multi-CDN tiered-caching convention) and
+// Cloudflare-CDN-Cache-Control (Cloudflare's own override of it, taking
+// precedence when both are present) additionally let Cloudflare's edge cache
+// on a different TTL than the browser does. None of the three headers turns
+// caching on by itself - Cloudflare still needs a Cache Rule (or similar)
+// marking this URL pattern as eligible before it caches anything; these only
+// control the TTL once it's eligible. Setting Cloudflare-CDN-Cache-Control at
+// all also switches Cloudflare to strict RFC 7234 authorization for this
+// response, which per Cloudflare's own docs accepts only s-maxage,
+// must-revalidate or public as directives - anything else in that specific
+// header causes a bypass - so only that safe subset is used here, not a bare
+// max-age.
+//
+// Deliberately not "immutable": a file's bytes can be edited in place after
+// its share was created (FilesUpdate can rewrite content without changing
+// the share or its shortlink), so a cache is expected to revalidate once
+// max-age is up rather than treat this URL as permanent.
+func cacheHeaders(h http.Header) {
+	const maxAge = "31536000" // 1 year
+	h.Set("Cache-Control", "public, max-age="+maxAge+", s-maxage="+maxAge)
+	h.Set("CDN-Cache-Control", "public, s-maxage="+maxAge)
+	h.Set("Cloudflare-CDN-Cache-Control", "public, s-maxage="+maxAge)
+	// Not a Cloudflare header - an older Fastly/Varnish-originated convention
+	// some other CDN setups still check. Harmless to include if ignored.
+	h.Set("Surrogate-Control", "max-age="+maxAge)
+}
 
 // setupShortlinkServer builds the standalone alt-domain listener (entry
 // point (b) of the shortlinks feature), fronted by the operator's own
@@ -32,40 +72,42 @@ type targetPathKey struct{}
 // at https://go.example.com/{code}, not handed off to the main domain. That
 // keeps the URL a visitor already has working for non-browser clients (curl,
 // download managers, video players doing Range requests) instead of routing
-// them through a second origin. Authorization and Range headers forward
+// them through a second origin.
+//
+// The proxy targets the main app's own listener on localhost, not its public
+// base URL: both run in the same process, so routing a request back out
+// through DNS, TLS and (usually) Cloudflare just to hairpin straight back in
+// is pure overhead - and unreliable overhead, since exactly that round trip
+// is what produced "ReverseProxy read error during body copy: unexpected
+// EOF" on larger streamed responses. Authorization and Range headers forward
 // automatically, so a password-protected share's Basic Auth challenge and
 // range-seeking both keep working exactly as they do calling the main app
 // directly.
 //
 // Bare "/" and any path that isn't a real shortlink code redirect to the
 // main app's configured base URL - visiting the wrong thing on this domain
-// always sends you home rather than showing a 404.
+// always sends you home rather than showing a 404. The viewer case also
+// redirects there: it needs the public URL specifically, since it's a real
+// browser navigation to the main-domain SPA, not a server-to-server hop.
 func setupShortlinkServer(cfg *config.ServerCmdConfig, resolver services.ShortlinkResolver, lg *zap.Logger) *http.Server {
 	base := strings.TrimSuffix(cfg.Server.BaseURL, "/")
+	local := &url.URL{Scheme: "http", Host: fmt.Sprintf("127.0.0.1:%d", cfg.Server.Port)}
 
-	upstream, err := url.Parse(base)
-	if err != nil || upstream.Scheme == "" || upstream.Host == "" {
-		// cmd.go's startup validation already requires a non-empty base-url
-		// when shortlinks are enabled; this only catches a malformed value
-		// (missing scheme, unparsable). Direct/zip resolutions fail closed to
-		// the home redirect below rather than proxying to a broken target.
-		lg.Error("shortlink_server.invalid_base_url", zap.String("base_url", base), zap.Error(err))
-		upstream = nil
-	}
-
-	var proxy *httputil.ReverseProxy
-	if upstream != nil {
-		target := *upstream
-		proxy = &httputil.ReverseProxy{
-			Rewrite: func(pr *httputil.ProxyRequest) {
-				pr.SetURL(&target)
-				if path, ok := pr.In.Context().Value(targetPathKey{}).(string); ok {
-					pr.Out.URL.Path = path
-					pr.Out.URL.RawPath = ""
-				}
-			},
-			ErrorLog: zap.NewStdLog(lg),
-		}
+	proxy := &httputil.ReverseProxy{
+		Rewrite: func(pr *httputil.ProxyRequest) {
+			pr.SetURL(local)
+			if info, ok := pr.In.Context().Value(requestContextKey{}).(proxyRequestInfo); ok {
+				pr.Out.URL.Path = info.path
+				pr.Out.URL.RawPath = ""
+			}
+		},
+		ModifyResponse: func(resp *http.Response) error {
+			if info, ok := resp.Request.Context().Value(requestContextKey{}).(proxyRequestInfo); ok && info.cacheable {
+				cacheHeaders(resp.Header)
+			}
+			return nil
+		},
+		ErrorLog: zap.NewStdLog(lg),
 	}
 
 	resolve := func(w http.ResponseWriter, r *http.Request, code string) {
@@ -74,11 +116,16 @@ func setupShortlinkServer(cfg *config.ServerCmdConfig, resolver services.Shortli
 				path := services.ShortlinkRedirectPath(code, res)
 				switch res.Action {
 				case services.ShortlinkDirect, services.ShortlinkZip:
-					if proxy != nil {
-						ctx := context.WithValue(r.Context(), targetPathKey{}, path)
-						proxy.ServeHTTP(w, r.WithContext(ctx))
-						return
-					}
+					// res.Share is nil only for ShortlinkNotFound/ShortlinkViewer in the
+					// one real implementation, but ShortlinkResolver is an interface -
+					// nothing stops another implementation (or a test double) from
+					// returning a Direct/Zip action with no Share. Fail closed: an
+					// unknown protection state doesn't get cached.
+					cacheable := res.Share != nil && res.Share.Password == nil
+					info := proxyRequestInfo{path: path, cacheable: cacheable}
+					ctx := context.WithValue(r.Context(), requestContextKey{}, info)
+					proxy.ServeHTTP(w, r.WithContext(ctx))
+					return
 				case services.ShortlinkViewer:
 					http.Redirect(w, r, base+path, http.StatusFound)
 					return
