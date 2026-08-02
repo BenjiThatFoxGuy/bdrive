@@ -30,15 +30,26 @@ var (
 )
 
 const (
-	// shortCodeAlphabet excludes 0/O, 1/l/I (visually ambiguous) and dashes
-	// (so a code can never be format-ambiguous with a canonical uuid).
+	// shortCodeAlphabet is for auto-generated codes only, so it sticks to
+	// plain alphanumerics (excluding 0/O, 1/l/I - visually ambiguous) rather
+	// than the wider set validateShortCode accepts for custom codes: a random
+	// code with dots or dashes scattered through it reads as broken, not
+	// stylish.
 	shortCodeAlphabet   = "23456789abcdefghijkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ"
 	shortCodeMinLength  = 4
 	shortCodeMaxLength  = 32
 	shortCodeGenRetries = 5
 )
 
-var shortCodePattern = regexp.MustCompile(`^[A-Za-z0-9]+$`)
+// shortCodePattern allows letters, numbers, dots, dashes and underscores -
+// the common "slug" charset - but requires the first and last character to
+// be alphanumeric. That's not just cosmetic: a code ending in "." is exactly
+// the kind of thing some chat apps and link-preview bots trim as trailing
+// punctuation when auto-linking a pasted URL, silently truncating the code
+// the visitor actually needs. A code doesn't need format-ambiguity
+// protection against a canonical uuid the way the old alphanumeric-only rule
+// implied - the 32-char max already rules that out, since a real uuid is 36.
+var shortCodePattern = regexp.MustCompile(`^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$`)
 
 // reservedShortCodes blocks custom slugs that would be confusing or collide
 // with real app routes/assets.
@@ -53,7 +64,7 @@ func validateShortCode(code string) error {
 		return fmt.Errorf("%w: must be between %d and %d characters", ErrShortCodeInvalid, shortCodeMinLength, shortCodeMaxLength)
 	}
 	if !shortCodePattern.MatchString(code) {
-		return fmt.Errorf("%w: only letters and numbers are allowed", ErrShortCodeInvalid)
+		return fmt.Errorf("%w: only letters, numbers, dots, dashes and underscores are allowed, and it must start and end with a letter or number", ErrShortCodeInvalid)
 	}
 	if reservedShortCodes[strings.ToLower(code)] {
 		return fmt.Errorf("%w: this code is reserved", ErrShortCodeInvalid)
