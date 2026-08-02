@@ -8,6 +8,7 @@ import (
 	"os"
 	"reflect"
 	"regexp"
+	"strings"
 	"sync"
 	"time"
 
@@ -54,6 +55,9 @@ func NewRun() *cobra.Command {
 			}
 			if err := loader.Validate(&cfg); err != nil {
 				return err
+			}
+			if cfg.Shortlinks.Enabled && strings.TrimSpace(cfg.Server.BaseURL) == "" {
+				return fmt.Errorf("server.base-url is required when shortlinks.enabled is true")
 			}
 			return nil
 		},
@@ -179,7 +183,21 @@ func runApplication(ctx context.Context, conf *config.ServerCmdConfig) {
 	}
 
 	// Setup and start HTTP server immediately
-	srv := setupServer(conf, db, cacher, lg, botSelector, eventBroadcaster)
+	srv, shortlinkResolver := setupServer(conf, db, cacher, lg, botSelector, eventBroadcaster)
+
+	var shortlinkSrv *http.Server
+	if conf.Shortlinks.Enabled {
+		shortlinkSrv = setupShortlinkServer(conf, shortlinkResolver, lg)
+		go func() {
+			lg.Info("shortlink_server.started", zap.String("address", conf.Shortlinks.ListenAddr))
+			if err := shortlinkSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+				// The alt-domain listener is optional infrastructure fronted by the
+				// operator's own reverse proxy — its failure shouldn't take down
+				// the main app, so it's logged rather than fed into serverErrCh.
+				lg.Error("shortlink_server.crashed", zap.Error(err))
+			}
+		}()
+	}
 
 	serverErrCh := make(chan error, 1)
 	go func() {
@@ -231,6 +249,11 @@ func runApplication(ctx context.Context, conf *config.ServerCmdConfig) {
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		lg.Error("server.shutdown.failed", zap.Error(err))
 	}
+	if shortlinkSrv != nil {
+		if err := shortlinkSrv.Shutdown(shutdownCtx); err != nil {
+			lg.Error("shortlink_server.shutdown.failed", zap.Error(err))
+		}
+	}
 
 	// Close Redis client if it was created
 	if redisClient != nil {
@@ -240,7 +263,7 @@ func runApplication(ctx context.Context, conf *config.ServerCmdConfig) {
 	lg.Info("server.stopped")
 }
 
-func setupServer(cfg *config.ServerCmdConfig, db *gorm.DB, cache cache.Cacher, lg *zap.Logger, botSelector tgc.BotSelector, eventBroadcaster events.EventBroadcaster) *http.Server {
+func setupServer(cfg *config.ServerCmdConfig, db *gorm.DB, cache cache.Cacher, lg *zap.Logger, botSelector tgc.BotSelector, eventBroadcaster events.EventBroadcaster) (*http.Server, services.ShortlinkResolver) {
 
 	apiSrv := services.NewApiService(db, cfg, cache, botSelector, eventBroadcaster)
 
@@ -249,7 +272,7 @@ func setupServer(cfg *config.ServerCmdConfig, db *gorm.DB, cache cache.Cacher, l
 	if err != nil {
 		lg.Error("failed to create server", zap.Error(err))
 		os.Exit(1)
-		return nil // unreachable but required for compilation
+		return nil, nil // unreachable but required for compilation
 	}
 
 	extendedSrv := services.NewExtendedMiddleware(srv, services.NewExtendedService(apiSrv))
@@ -273,7 +296,25 @@ func setupServer(cfg *config.ServerCmdConfig, db *gorm.DB, cache cache.Cacher, l
 	}))
 	mux.Use(appcontext.Middleware)
 	mux.Mount("/api/", http.StripPrefix("/api", extendedSrv))
-	mux.Handle("/*", middleware.SPAHandler(ui.StaticFS))
+
+	spaHandler := middleware.SPAHandler(ui.StaticFS)
+
+	// Shortlink interceptor: a plain chi route registered outside /api/,
+	// sitting in front of the SPA catch-all. It only ever changes behavior
+	// for an actual short_code match (ResolveShortlink never falls back to
+	// matching a bare uuid) — anything else, including today's legacy uuid
+	// share links and plain garbage, falls straight through to the SPA
+	// exactly as before this feature existed.
+	mux.Get("/share/{token}", func(w http.ResponseWriter, r *http.Request) {
+		token := chi.URLParam(r, "token")
+		res, err := apiSrv.ResolveShortlink(r.Context(), token, r.UserAgent())
+		if err != nil || res.Action == services.ShortlinkNotFound || res.Action == services.ShortlinkViewer {
+			spaHandler(w, r)
+			return
+		}
+		http.Redirect(w, r, services.ShortlinkRedirectPath(token, res), http.StatusFound)
+	})
+	mux.Handle("/*", spaHandler)
 
 	return &http.Server{
 		Addr:              fmt.Sprintf(":%d", cfg.Server.Port),
@@ -282,5 +323,5 @@ func setupServer(cfg *config.ServerCmdConfig, db *gorm.DB, cache cache.Cacher, l
 		WriteTimeout:      cfg.Server.WriteTimeout,
 		ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout:       60 * time.Second,
-	}
+	}, apiSrv
 }
