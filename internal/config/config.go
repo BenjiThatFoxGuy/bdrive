@@ -103,6 +103,7 @@ type ShortlinkConfig struct {
 	Enabled    bool   `default:"false" description:"Enable the standalone shortlink resolver listener for a branded short-link domain (bare /{code} paths, fronted by your own reverse proxy)"`
 	ListenAddr string `default:":8081" description:"Address the shortlink resolver listens on when enabled"`
 	CodeLength int    `default:"7" description:"Length of auto-generated shortlink codes"`
+	Domain     string `default:"" description:"Public-facing base URL of the standalone shortlink listener (e.g. https://go.example.com), exposed via GET /config so clients can build a direct-link URL. Purely informational - not used for routing, and safe to leave unset if the listener has no public domain assigned yet"`
 }
 
 type CacheConfig struct {

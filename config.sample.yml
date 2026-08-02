@@ -44,9 +44,10 @@ server:
   write-timeout: "1h"
 
 shortlinks:
+  code-length: 7
+  domain: ""
   enabled: false
   listen-addr: ":8081"
-  code-length: 7
 
 tg:
   app-hash: "8da85b0d5bfe62527e5b244c209159c3"
