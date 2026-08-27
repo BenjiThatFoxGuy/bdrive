@@ -150,6 +150,24 @@ func TestContentTypeFor(t *testing.T) {
 			mimeType: "",
 			want:     "application/vnd.apple.pkpass",
 		},
+		{
+			name:     "empty mime type falls back to the psd extension",
+			fileName: "poster.psd",
+			mimeType: "",
+			want:     "image/vnd.adobe.photoshop",
+		},
+		{
+			name:     "generic mime type falls back to the psd extension",
+			fileName: "poster.psd",
+			mimeType: defaultContentType,
+			want:     "image/vnd.adobe.photoshop",
+		},
+		{
+			name:     "psd extension match is case insensitive",
+			fileName: "POSTER.PSD",
+			mimeType: "",
+			want:     "image/vnd.adobe.photoshop",
+		},
 	}
 
 	for _, tt := range tests {

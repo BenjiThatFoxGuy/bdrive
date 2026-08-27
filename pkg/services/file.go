@@ -51,6 +51,9 @@ func init() {
 	// an empty type for it on upload, so passes would otherwise stream as
 	// octet-stream and never hand off to Wallet on iOS and macOS.
 	_ = mime.AddExtensionType(".pkpass", "application/vnd.apple.pkpass")
+	// Coverage for .psd in /etc/mime.types is distribution-dependent, so register
+	// it here rather than relying on the system table being populated.
+	_ = mime.AddExtensionType(".psd", "image/vnd.adobe.photoshop")
 }
 
 // contentTypeFor falls back to the file extension when the stored MIME type is
