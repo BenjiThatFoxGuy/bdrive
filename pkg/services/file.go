@@ -2,6 +2,7 @@ package services
 
 import (
 	"archive/zip"
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -19,6 +20,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/tgdrive/teldrive/internal/api"
 	"github.com/tgdrive/teldrive/internal/appcontext"
+	"github.com/tgdrive/teldrive/internal/psdconv"
 	"github.com/tgdrive/teldrive/internal/auth"
 	"github.com/tgdrive/teldrive/internal/cache"
 	"github.com/tgdrive/teldrive/internal/category"
@@ -1776,6 +1778,13 @@ func (e *extendedService) FilesStream(w http.ResponseWriter, r *http.Request, fi
 	rangeHeader := r.Header.Get("Range")
 	contentType := contentTypeFor(file.Name, file.MimeType)
 
+	// PSD-to-PNG conversion: when format=png is requested for a PSD file,
+	// download the entire file, convert off-thread, and serve the PNG.
+	if r.URL.Query().Get("format") == "png" && psdconv.IsPSD(contentType, file.Name) {
+		e.servePSDAsPNG(w, r, file, session, logger)
+		return
+	}
+
 	if file.Size == nil || *file.Size == 0 {
 		w.Header().Set("Content-Type", contentType)
 		w.Header().Set("Content-Length", "0")
@@ -1927,6 +1936,97 @@ func (e *extendedService) FilesStream(w http.ResponseWriter, r *http.Request, fi
 		})
 
 	}
+}
+
+// servePSDAsPNG downloads the full PSD, converts it to PNG off the request
+// goroutine, and writes the result. Called from FilesStream when ?format=png
+// is requested for a PSD file.
+func (e *extendedService) servePSDAsPNG(w http.ResponseWriter, r *http.Request, file *models.File, session *models.Session, logger *zap.Logger) {
+	ctx := r.Context()
+
+	if file.Size != nil && *file.Size > 200*1024*1024 {
+		http.Error(w, "PSD too large for conversion (max 200 MB)", http.StatusRequestedRangeNotSatisfiable)
+		return
+	}
+
+	tokens, err := e.api.channelManager.BotTokens(ctx, session.UserId)
+	if err != nil {
+		logger.Error("psd.bots_fetch_failed", zap.Error(err))
+		http.Error(w, "failed to get bots", http.StatusInternalServerError)
+		return
+	}
+	if limit := e.api.cnf.TG.Stream.BotsLimit; limit > 0 && len(tokens) > limit {
+		tokens = tokens[:limit]
+	}
+
+	var (
+		client *telegram.Client
+		token  string
+	)
+	if len(tokens) == 0 {
+		client, err = tgc.AuthClient(ctx, &e.api.cnf.TG, session.Session, e.api.newMiddlewares(ctx, 5)...)
+	} else {
+		token, _, err = e.api.botSelector.Next(ctx, tgc.BotOpStream, session.UserId, tokens)
+		if err == nil {
+			client, err = tgc.BotClient(ctx, e.api.db, e.api.cache, &e.api.cnf.TG, token, e.api.newMiddlewares(ctx, 5)...)
+		}
+	}
+	if err != nil {
+		logger.Error("psd.client_failed", zap.Error(err))
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	botID := strconv.FormatInt(session.UserId, 10)
+	if token != "" {
+		if parts := strings.Split(token, ":"); len(parts) > 0 {
+			botID = parts[0]
+		}
+	}
+
+	// Download the full PSD and convert in a separate goroutine, piping the
+	// result back to the response writer through a channel.
+	type result struct {
+		buf *bytes.Buffer
+		err error
+	}
+	ch := make(chan result, 1)
+
+	tgc.RunWithAuth(ctx, client, token, func(ctx context.Context) error {
+		fileParts, err := getParts(ctx, client, e.api.cache, file)
+		if err != nil {
+			ch <- result{nil, err}
+			return nil
+		}
+
+		lr, err := reader.NewReader(ctx, client.API(), e.api.cache, file, fileParts, 0, *file.Size-1, &e.api.cnf.TG, botID)
+		if err != nil {
+			ch <- result{nil, err}
+			return nil
+		}
+		defer lr.Close()
+
+		go func() {
+			buf, convErr := psdconv.ToPNG(ctx, lr)
+			ch <- result{buf, convErr}
+		}()
+		return nil
+	})
+
+	res := <-ch
+	if res.err != nil {
+		logger.Error("psd.convert_failed", zap.Error(res.err))
+		http.Error(w, "PSD conversion failed: "+res.err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	pngName := strings.TrimSuffix(file.Name, filepath.Ext(file.Name)) + ".png"
+	w.Header().Set("Content-Type", "image/png")
+	w.Header().Set("Content-Length", strconv.Itoa(res.buf.Len()))
+	w.Header().Set("Content-Disposition", mime.FormatMediaType("inline", map[string]string{"filename": pngName}))
+	w.Header().Set("Cache-Control", "public, max-age=86400")
+	w.WriteHeader(http.StatusOK)
+	io.Copy(w, res.buf)
 }
 
 func (e *extendedService) SharesStream(w http.ResponseWriter, r *http.Request, shareId, fileId string) {
