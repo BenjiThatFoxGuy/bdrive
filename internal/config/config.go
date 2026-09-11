@@ -90,6 +90,7 @@ type ServerConfig struct {
 	ReadTimeout      time.Duration `default:"1h" description:"Maximum duration for reading entire request"`
 	WriteTimeout     time.Duration `default:"1h" description:"Maximum duration for writing response"`
 	BaseURL          string        `default:"" description:"Fully-qualified base URL of the main app (e.g. https://drive.example.com), used to build absolute redirect targets from the shortlink resolver listener. Required when shortlinks.enabled is true."`
+	ResizerHost      string        `default:"" description:"Base URL of the imgproxy/image resizer instance for thumbnails (e.g. https://imgproxy.example.com). Exposed via /config so all clients use the same resizer."`
 }
 
 type FilesConfig struct {

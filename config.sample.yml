@@ -41,6 +41,7 @@ server:
   graceful-shutdown: "10s"
   port: 8080
   read-timeout: "1h"
+  resizer-host: ""
   write-timeout: "1h"
 
 shortlinks:

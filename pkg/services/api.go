@@ -61,6 +61,9 @@ func (a *apiService) ConfigConfig(ctx context.Context) (*api.ServerConfig, error
 	if a.cnf.Shortlinks.Domain != "" {
 		res.ShortlinkDomain = api.NewOptString(a.cnf.Shortlinks.Domain)
 	}
+	if a.cnf.Server.ResizerHost != "" {
+		res.ResizerHost = api.NewOptString(a.cnf.Server.ResizerHost)
+	}
 	return res, nil
 }
 
