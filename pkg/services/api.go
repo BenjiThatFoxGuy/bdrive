@@ -227,7 +227,7 @@ type extendedMiddleware struct {
 }
 
 func (m *extendedMiddleware) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	// Zip virtual folder endpoints (not in OGen spec).
+	// Archive virtual folder endpoints (not in OGen spec).
 	if r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/files/zip/") {
 		rest := strings.TrimPrefix(r.URL.Path, "/files/zip/")
 		if idx := strings.Index(rest, "/"); idx > 0 {
@@ -239,6 +239,23 @@ func (m *extendedMiddleware) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				return
 			case "file":
 				m.srv.ZipExtract(w, r, fileId)
+				return
+			}
+		}
+	}
+
+	// Unitypackage virtual folder endpoints.
+	if r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/files/unitypkg/") {
+		rest := strings.TrimPrefix(r.URL.Path, "/files/unitypkg/")
+		if idx := strings.Index(rest, "/"); idx > 0 {
+			fileId := rest[:idx]
+			action := rest[idx+1:]
+			switch action {
+			case "list":
+				m.srv.UnityPkgBrowse(w, r, fileId)
+				return
+			case "file":
+				m.srv.UnityPkgExtract(w, r, fileId)
 				return
 			}
 		}
