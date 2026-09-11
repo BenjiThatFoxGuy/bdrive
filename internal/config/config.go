@@ -93,6 +93,7 @@ type ServerConfig struct {
 }
 
 type FilesConfig struct {
+	EnableZipBrowsing bool  `default:"true" description:"Browse zip file contents as virtual folders"`
 	EnableZipDownload bool  `default:"true" description:"Allow downloading multiple files bundled as a zip archive"`
 	ZipMaxFiles       int   `default:"10000" description:"Maximum files in a single zip download (0 disables the limit)"`
 	ZipMaxSize        int64 `default:"0" description:"Maximum total uncompressed bytes in a single zip download (0 disables the limit)"`

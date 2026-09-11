@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/go-faster/errors"
@@ -223,6 +224,23 @@ type extendedMiddleware struct {
 }
 
 func (m *extendedMiddleware) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// Zip virtual folder endpoints (not in OGen spec).
+	if r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/files/zip/") {
+		rest := strings.TrimPrefix(r.URL.Path, "/files/zip/")
+		if idx := strings.Index(rest, "/"); idx > 0 {
+			fileId := rest[:idx]
+			action := rest[idx+1:]
+			switch action {
+			case "list":
+				m.srv.ZipBrowse(w, r, fileId)
+				return
+			case "file":
+				m.srv.ZipExtract(w, r, fileId)
+				return
+			}
+		}
+	}
+
 	route, ok := m.next.FindRoute(r.Method, r.URL.Path)
 	if !ok {
 		m.next.ServeHTTP(w, r)
