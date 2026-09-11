@@ -296,6 +296,7 @@ func setupServer(cfg *config.ServerCmdConfig, db *gorm.DB, cache cache.Cacher, l
 	}))
 	mux.Use(appcontext.Middleware)
 	mux.Mount("/api/", http.StripPrefix("/api", extendedSrv))
+	mux.Mount("/api/settings", apiSrv.SettingsRouter())
 
 	spaHandler := middleware.SPAHandler(ui.StaticFS)
 
