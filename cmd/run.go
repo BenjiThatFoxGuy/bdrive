@@ -296,6 +296,7 @@ func setupServer(cfg *config.ServerCmdConfig, db *gorm.DB, cache cache.Cacher, l
 	}))
 	mux.Use(appcontext.Middleware)
 	mux.Mount("/api/settings", apiSrv.SettingsRouter())
+	mux.Mount("/api/files", apiSrv.ResolveRouter())
 	mux.Mount("/api/", http.StripPrefix("/api", extendedSrv))
 
 	spaHandler := middleware.SPAHandler(ui.StaticFS)
@@ -306,6 +307,22 @@ func setupServer(cfg *config.ServerCmdConfig, db *gorm.DB, cache cache.Cacher, l
 	// matching a bare uuid) — anything else, including today's legacy uuid
 	// share links and plain garbage, falls straight through to the SPA
 	// exactly as before this feature existed.
+	// Resolve-token handler for "show in folder" from share views.
+	// If authenticated, resolves the ephemeral token to a file path.
+	// If not, the SPA catch-all shows the login screen.
+	mux.Get("/resolve/{token}", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
+		w.Header().Set("Pragma", "no-cache")
+		w.Header().Set("CDN-Cache-Control", "no-store")
+		w.Header().Set("Cloudflare-CDN-Cache-Control", "no-store")
+		userId := auth.GetUser(r.Context())
+		if userId == 0 {
+			spaHandler(w, r)
+			return
+		}
+		apiSrv.ResolveHandler()(w, r)
+	})
+
 	mux.Get("/share/{token}", func(w http.ResponseWriter, r *http.Request) {
 		token := chi.URLParam(r, "token")
 		res, err := apiSrv.ResolveShortlink(r.Context(), token, r.UserAgent())
