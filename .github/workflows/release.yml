@@ -21,7 +21,7 @@ permissions: write-all
 jobs:
   setup:
     name: Determine build matrix
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     outputs:
       targets: ${{ steps.targets.outputs.targets }}
       is_release: ${{ steps.targets.outputs.is_release }}
@@ -47,7 +47,7 @@ jobs:
   cross-compile:
     name: Cross-compile (${{ matrix.target.goos }}/${{ matrix.target.goarch }})
     needs: setup
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     strategy:
       matrix:
         target: ${{ fromJSON(needs.setup.outputs.targets) }}
@@ -110,7 +110,7 @@ jobs:
   build-and-push:
     name: Build and push image
     needs: cross-compile
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -188,7 +188,7 @@ jobs:
     name: Create GitHub release
     if: needs.setup.outputs.is_release == 'true'
     needs: [setup, cross-compile]
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     steps:
       - name: Checkout
         uses: actions/checkout@v4
