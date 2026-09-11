@@ -44,9 +44,9 @@ func init() {
 func (a *apiService) ResolveRouter() chi.Router {
 	r := chi.NewRouter()
 
-	// POST /api/files/resolve-token — create an ephemeral token for a file ID.
+	// POST /api/resolve/token — create an ephemeral token for a file ID.
 	// No auth required (called from share views).
-	r.Post("/resolve-token", a.handleCreateResolveToken)
+	r.Post("/token", a.handleCreateResolveToken)
 
 	return r
 }
