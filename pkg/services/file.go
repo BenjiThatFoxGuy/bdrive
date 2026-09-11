@@ -56,6 +56,19 @@ func init() {
 	// Coverage for .psd in /etc/mime.types is distribution-dependent, so register
 	// it here rather than relying on the system table being populated.
 	_ = mime.AddExtensionType(".psd", "image/vnd.adobe.photoshop")
+
+	// 3D model formats — browsers send empty or octet-stream for all of these.
+	_ = mime.AddExtensionType(".fbx", "application/octet-stream")
+	_ = mime.AddExtensionType(".gltf", "model/gltf+json")
+	_ = mime.AddExtensionType(".glb", "model/gltf-binary")
+	_ = mime.AddExtensionType(".obj", "model/obj")
+	_ = mime.AddExtensionType(".stl", "model/stl")
+	_ = mime.AddExtensionType(".3ds", "application/x-3ds")
+	_ = mime.AddExtensionType(".ply", "application/x-ply")
+	_ = mime.AddExtensionType(".dae", "model/vnd.collada+xml")
+	_ = mime.AddExtensionType(".wrl", "model/vrml")
+	_ = mime.AddExtensionType(".3mf", "application/vnd.ms-package.3dmanufacturing-3dmodel+xml")
+	_ = mime.AddExtensionType(".usdz", "model/vnd.usdz+zip")
 }
 
 // contentTypeFor falls back to the file extension when the stored MIME type is
