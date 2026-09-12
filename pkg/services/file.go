@@ -69,6 +69,9 @@ func init() {
 	_ = mime.AddExtensionType(".wrl", "model/vrml")
 	_ = mime.AddExtensionType(".3mf", "application/vnd.ms-package.3dmanufacturing-3dmodel+xml")
 	_ = mime.AddExtensionType(".usdz", "model/vnd.usdz+zip")
+
+	// Unity packages — tar.gz archives with a specific internal structure.
+	_ = mime.AddExtensionType(".unitypackage", "application/x-unitypackage")
 }
 
 // contentTypeFor falls back to the file extension when the stored MIME type is

@@ -22,7 +22,7 @@ var (
 	modelExtensions    = []string{"fbx", "gltf", "glb", "obj", "stl", "3ds", "ply", "dae", "wrl", "vrml", "3mf", "usdz"}
 	videoExtensions    = []string{"mp4", "webm", "mov", "avi", "m4v", "flv", "wmv", "mkv", "mpg", "mpeg", "m2v", "mpv"}
 	audioExtensions    = []string{"mp3", "wav", "ogg", "m4a", "flac", "aac", "wma", "aiff", "ape", "alac", "opus", "pcm"}
-	archiveExtensions  = []string{"zip", "rar", "tar", "gz", "7z", "iso", "dmg", "pkg", "xz", "tgz"}
+	archiveExtensions  = []string{"zip", "rar", "tar", "gz", "7z", "iso", "dmg", "pkg", "xz", "tgz", "unitypackage"}
 )
 
 func GetCategory(fileName string) Category {
