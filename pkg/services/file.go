@@ -496,25 +496,28 @@ func (a *apiService) FilesCreate(ctx context.Context, fileIn *api.File) (*api.Fi
 		}
 	}
 
-	// Check for deduplication: if file is not encrypted and has a hash, look for existing file with same hash
-	if !fileDB.IsEncrypted() && fileDB.Hash != nil && *fileDB.Hash != "" && fileDB.Type == string(api.FileTypeFile) {
-		existingFile, err := a.FindDeduplicateFile(ctx, userId, *fileDB.Hash)
-		if err != nil {
-			// Log error but don't fail the upload due to dedup check
-			logging.FromContext(ctx).Error("dedup check failed", zap.Error(err))
-		}
-		if existingFile != nil {
-			// Found a duplicate: set ReferencedFileId to point to the canonical file
-			// This makes this file a reference to the existing file's Telegram messages
-			fileDB.ReferencedFileId = utils.Ptr(existingFile.ID)
-			// Keep the same Parts and ChannelId as the existing file
-			fileDB.Parts = existingFile.Parts
-			fileDB.ChannelId = existingFile.ChannelId
-		}
-	}
-
-	// Use transaction to ensure file creation and upload cleanup are atomic
+	// Use transaction to ensure dedup check + file creation + upload cleanup are atomic
 	err = a.db.Transaction(func(tx *gorm.DB) error {
+		// Check for deduplication inside the transaction to prevent race conditions
+		// when concurrent uploads of the same content arrive simultaneously.
+		// Uses raw query with FOR UPDATE to lock the canonical row, serializing
+		// concurrent dedup checks for the same hash.
+		if !fileDB.IsEncrypted() && fileDB.Hash != nil && *fileDB.Hash != "" && fileDB.Type == string(api.FileTypeFile) {
+			var existingFile models.File
+			if err := tx.Raw(`
+				SELECT * FROM teldrive.files
+				WHERE user_id = ? AND hash = ? AND status = 'active' AND encrypted = false
+				ORDER BY created_at ASC
+				LIMIT 1
+				FOR UPDATE SKIP LOCKED
+			`, userId, *fileDB.Hash).Scan(&existingFile).Error; err == nil && existingFile.ID != "" {
+				// Found a duplicate: reference the canonical file's Telegram data
+				fileDB.ReferencedFileId = utils.Ptr(existingFile.ID)
+				fileDB.Parts = existingFile.Parts
+				fileDB.ChannelId = existingFile.ChannelId
+			}
+		}
+
 		//For some reason, gorm conflict clauses are not working with partial index so using raw query
 		if err := database.RetryTransientLock(ctx, database.DefaultLockRetryAttempts, func() error {
 			return tx.Raw(`
