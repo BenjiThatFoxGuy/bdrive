@@ -18,7 +18,7 @@ BDrive is a powerful utility that enables you to organise your telegram files an
 - **Enhanced Management Capabilities:** BDrive not only excels in speed but also offers an intuitive user interface for efficient file interaction which other tool lacks. Its compatibility with Rclone further enhances file management.
 
 > [!IMPORTANT]
-> BDrive functions as a wrapper over your Telegram account, simplifying file access. However, users must adhere to the limitations imposed by the Telegram API. BDrive is not responsible for any consequences arising from non-compliance with these API limits.You will be banned instantly if you misuse telegram API.
+> BDrive functions as a wrapper over your Telegram account, simplifying file access. However, users must adhere to the limitations imposed by the Telegram API. BDrive is not responsible for any consequences arising from non-compliance with these API limits. You will be banned instantly if you misuse telegram API.
 
 Visit https://bdrive-docs.pages.dev for setting up BDrive.
 
@@ -44,29 +44,9 @@ This section tracks functional changes made in this fork relative to [tgdrive/te
 
 - **Added: Photoshop (`.psd`) preview with layer toggling in the web UI.** Photoshop files had no preview at all, so the only way to see inside one was to download it and open it in an app that understands the format. The UI now parses the file in the browser (`ag-psd`) and shows the flattened image Photoshop saves alongside the layer data, then offers a layers panel: an eye toggle per layer, expandable groups, and a live re-composite as you click. Hiding a group leaves the layers inside it untouched, so unhiding restores each child's own state, and **Reset** returns everything to how the file was saved. The render is a faithful approximation rather than a Photoshop-accurate one - it honours groups, per-layer opacity, layer masks, clipping layers and the sixteen blend modes a browser can express, while Linear/Vivid/Pin Light, Hard Mix, Linear Burn, Linear Dodge, Subtract, Divide, Darker/Lighter Color and Dissolve are drawn as Normal and labelled as such in the panel; layer effects, vector masks and adjustment layers are not rendered. Parsing runs in a Web Worker, the first in the frontend, because `readPsd` is a synchronous call that cannot be interrupted and would otherwise freeze the tab on a large file - and because it keeps the parser out of both the main bundle and the preview's own lazy chunk. Loading is tiered: the first pass reads only the merged image but still yields every layer's metadata, so the size gates, the layer tree and the blend-mode warnings are all decided before a single layer pixel is decoded, and layer bitmaps are read only when the panel is opened (or automatically, for files saved without a flattened image, where layers are the only way to show anything). Files over 256MB are never fetched, documents over 64 megapixels are rejected from the header, and layer toggling switches off past 250 layers or 192MB of decoded layer data, with the real numbers given as the reason; the layer budgets halve on low-memory devices. `.psb` is not supported. On the backend, `.psd` is registered as `image/vnd.adobe.photoshop` so a downloaded file arrives with a correct type rather than `application/octet-stream`. ([bdrive-ui#4496b1f](https://github.com/BenjiThatFoxGuy/bdrive-ui/commit/4496b1f207d1378b0bd753b7c957d36b560f16e4), [bdrive#0952477](https://github.com/BenjiThatFoxGuy/bdrive/commit/0952477deb9edcbafa273aa9b61ae831d7b758e7))
 
-# Recognitions
-
-<a href="https://trendshift.io/repositories/7568" target="_blank"><img src="https://trendshift.io/api/badge/repositories/7568" alt="divyam234%2Fteldrive | Trendshift" style="width: 250px; height: 55px;" width="250" height="55"/></a>
-
-## Best Practices for Using BDrive
-
-### Dos:
-
-- **Follow Limits:** Adhere to the limits imposed by Telegram servers to avoid account bans and automatic deletion of your channel.Your files will be removed from telegram servers if you try to abuse the service as most people have zero brains they will still do so good luck.
-- **Responsible Storage:** Be mindful of the content you store on Telegram. Utilize storage efficiently and only keep data that serves a purpose.
-  
-### Don'ts:
-- **Data Hoarding:** Avoid excessive data hoarding, as it not only violates Telegram's terms.
-  
-By following these guidelines, you contribute to the responsible and effective use of Telegram, maintaining a fair and equitable environment for all users.
-
 ## Contributing
 
 Feel free to contribute to this project.See [CONTRIBUTING.md](CONTRIBUTING.md) for more information.
-
-## Donate
-
-If you like this project small contribution would be appreciated [Paypal](https://paypal.me/redux234).
 
 ## Star History
 
