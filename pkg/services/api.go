@@ -244,6 +244,29 @@ func (m *extendedMiddleware) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// CBZ (Comic Book Archive) virtual folder endpoints.
+	if r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/files/cbz/") {
+		rest := strings.TrimPrefix(r.URL.Path, "/files/cbz/")
+		if idx := strings.Index(rest, "/"); idx > 0 {
+			fileId := rest[:idx]
+			action := rest[idx+1:]
+			switch action {
+			case "list":
+				m.srv.CbzBrowse(w, r, fileId)
+				return
+			case "file":
+				m.srv.CbzExtract(w, r, fileId)
+				return
+			case "metadata":
+				m.srv.CbzMetadata(w, r, fileId)
+				return
+			case "cover":
+				m.srv.CbzCover(w, r, fileId)
+				return
+			}
+		}
+	}
+
 	// Unitypackage virtual folder endpoints.
 	if r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/files/unitypkg/") {
 		rest := strings.TrimPrefix(r.URL.Path, "/files/unitypkg/")

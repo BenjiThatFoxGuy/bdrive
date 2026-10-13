@@ -14,8 +14,8 @@ import (
 // UnityPkgBrowse lists the contents of a .unitypackage file at a given inner path.
 // GET /files/unitypkg/{fileId}/list?path=/inner/path
 func (e *extendedService) UnityPkgBrowse(w http.ResponseWriter, r *http.Request, fileId string) {
-	if !e.api.cnf.Files.EnableZipBrowsing {
-		http.Error(w, "archive browsing is disabled", http.StatusForbidden)
+	if !e.api.cnf.Files.EnableArchiveBrowsing || !e.api.cnf.Files.EnableUnityPkgBrowsing {
+		http.Error(w, "unitypackage browsing is disabled", http.StatusForbidden)
 		return
 	}
 
@@ -66,8 +66,8 @@ func (e *extendedService) UnityPkgBrowse(w http.ResponseWriter, r *http.Request,
 // UnityPkgExtract serves a single file from inside a .unitypackage archive.
 // GET /files/unitypkg/{fileId}/file?path=/inner/path/to/file.txt
 func (e *extendedService) UnityPkgExtract(w http.ResponseWriter, r *http.Request, fileId string) {
-	if !e.api.cnf.Files.EnableZipBrowsing {
-		http.Error(w, "archive browsing is disabled", http.StatusForbidden)
+	if !e.api.cnf.Files.EnableArchiveBrowsing || !e.api.cnf.Files.EnableUnityPkgBrowsing {
+		http.Error(w, "unitypackage browsing is disabled", http.StatusForbidden)
 		return
 	}
 
