@@ -14,8 +14,8 @@ import (
 // CbzBrowse lists the contents of a CBZ file at a given inner path.
 // GET /files/cbz/{fileId}/list?path=/inner/path
 func (e *extendedService) CbzBrowse(w http.ResponseWriter, r *http.Request, fileId string) {
-	if !e.api.cnf.Files.EnableZipBrowsing {
-		http.Error(w, "archive browsing is disabled", http.StatusForbidden)
+	if !e.api.cnf.Files.EnableArchiveBrowsing || !e.api.cnf.Files.EnableCbzBrowsing {
+		http.Error(w, "cbz browsing is disabled", http.StatusForbidden)
 		return
 	}
 
@@ -67,8 +67,8 @@ func (e *extendedService) CbzBrowse(w http.ResponseWriter, r *http.Request, file
 // CbzExtract serves a single file from inside a CBZ archive.
 // GET /files/cbz/{fileId}/file?path=/inner/path/to/page.jpg
 func (e *extendedService) CbzExtract(w http.ResponseWriter, r *http.Request, fileId string) {
-	if !e.api.cnf.Files.EnableZipBrowsing {
-		http.Error(w, "archive browsing is disabled", http.StatusForbidden)
+	if !e.api.cnf.Files.EnableArchiveBrowsing || !e.api.cnf.Files.EnableCbzBrowsing {
+		http.Error(w, "cbz browsing is disabled", http.StatusForbidden)
 		return
 	}
 
@@ -120,8 +120,8 @@ func (e *extendedService) CbzExtract(w http.ResponseWriter, r *http.Request, fil
 // CbzMetadata returns the parsed ComicInfo.xml metadata from a CBZ file.
 // GET /files/cbz/{fileId}/metadata
 func (e *extendedService) CbzMetadata(w http.ResponseWriter, r *http.Request, fileId string) {
-	if !e.api.cnf.Files.EnableZipBrowsing {
-		http.Error(w, "archive browsing is disabled", http.StatusForbidden)
+	if !e.api.cnf.Files.EnableArchiveBrowsing || !e.api.cnf.Files.EnableCbzBrowsing {
+		http.Error(w, "cbz browsing is disabled", http.StatusForbidden)
 		return
 	}
 
@@ -171,8 +171,8 @@ func (e *extendedService) CbzMetadata(w http.ResponseWriter, r *http.Request, fi
 // CbzCover serves the cover image from a CBZ archive (first image by sort order).
 // GET /files/cbz/{fileId}/cover
 func (e *extendedService) CbzCover(w http.ResponseWriter, r *http.Request, fileId string) {
-	if !e.api.cnf.Files.EnableZipBrowsing {
-		http.Error(w, "archive browsing is disabled", http.StatusForbidden)
+	if !e.api.cnf.Files.EnableArchiveBrowsing || !e.api.cnf.Files.EnableCbzBrowsing {
+		http.Error(w, "cbz browsing is disabled", http.StatusForbidden)
 		return
 	}
 

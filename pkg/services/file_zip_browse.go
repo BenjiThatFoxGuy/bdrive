@@ -24,7 +24,7 @@ import (
 // ZipBrowse lists the contents of a zip file at a given inner path.
 // GET /files/zip/{fileId}/list?path=/inner/path
 func (e *extendedService) ZipBrowse(w http.ResponseWriter, r *http.Request, fileId string) {
-	if !e.api.cnf.Files.EnableZipBrowsing {
+	if !e.api.cnf.Files.EnableArchiveBrowsing || !e.api.cnf.Files.EnableZipBrowsing {
 		http.Error(w, "zip browsing is disabled", http.StatusForbidden)
 		return
 	}
@@ -77,7 +77,7 @@ func (e *extendedService) ZipBrowse(w http.ResponseWriter, r *http.Request, file
 // ZipExtract serves a single file from inside a zip archive.
 // GET /files/zip/{fileId}/file?path=/inner/path/to/file.txt
 func (e *extendedService) ZipExtract(w http.ResponseWriter, r *http.Request, fileId string) {
-	if !e.api.cnf.Files.EnableZipBrowsing {
+	if !e.api.cnf.Files.EnableArchiveBrowsing || !e.api.cnf.Files.EnableZipBrowsing {
 		http.Error(w, "zip browsing is disabled", http.StatusForbidden)
 		return
 	}

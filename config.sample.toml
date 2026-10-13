@@ -22,6 +22,10 @@ max-lifetime = '10m'
 max-open-connections = 25
 
 [files]
+enable-archive-browsing = true
+enable-zip-browsing = false
+enable-cbz-browsing = true
+enable-unitypkg-browsing = true
 enable-zip-download = true
 zip-max-files = 10000
 zip-max-size = 0
