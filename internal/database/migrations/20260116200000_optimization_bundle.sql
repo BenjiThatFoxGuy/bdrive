@@ -27,7 +27,14 @@ CREATE INDEX IF NOT EXISTS idx_files_type ON teldrive.files (user_id, status, ty
 
 -- Search (Using Function)
 DROP INDEX IF EXISTS teldrive.idx_files_name_search;
-CREATE INDEX idx_files_name_search ON teldrive.files USING pgroonga (teldrive.clean_name(name)) WITH (tokenizer='TokenNgram');
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_available_extensions WHERE name = 'pgroonga') THEN
+    CREATE EXTENSION IF NOT EXISTS pgroonga;
+    CREATE INDEX idx_files_name_search ON teldrive.files USING pgroonga (teldrive.clean_name(name)) WITH (tokenizer='TokenNgram');
+  END IF;
+END
+$$;
 
 -- Rclone / UUIDv7 Optimization (Covering)
 CREATE INDEX IF NOT EXISTS idx_files_id_browsing ON teldrive.files (user_id, parent_id, status, id DESC) INCLUDE (name, size, mime_type, type);

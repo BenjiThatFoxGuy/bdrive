@@ -18,6 +18,9 @@ import (
 
 type fileQueryBuilder struct {
 	db *gorm.DB
+	// pgroonga is true when the pgroonga extension is installed. When false,
+	// search falls back to plain ILIKE (text) and native POSIX regex (~).
+	pgroonga bool
 }
 
 type fileResponse struct {
@@ -189,9 +192,21 @@ func (afb *fileQueryBuilder) applySingleDateFilter(query *gorm.DB, dateFilter st
 func (afb *fileQueryBuilder) applySearchQuery(query *gorm.DB, filesQuery *api.FilesListParams) *gorm.DB {
 	switch filesQuery.SearchType.Value {
 	case api.FileQuerySearchTypeText:
-		query = query.Where("teldrive.clean_name(name) &@~ teldrive.clean_name(?)", filesQuery.Query.Value)
+		if afb.pgroonga {
+			query = query.Where("teldrive.clean_name(name) &@~ teldrive.clean_name(?)", filesQuery.Query.Value)
+		} else {
+			// Fallback when pgroonga is not installed. clean_name() strips
+			// LIKE wildcards (%, _, \) to spaces, so plain concatenation is
+			// safe without an ESCAPE clause. Slower (no N-gram index) but
+			// functional on stock Postgres.
+			query = query.Where("teldrive.clean_name(name) ILIKE '%' || teldrive.clean_name(?) || '%'", filesQuery.Query.Value)
+		}
 	case api.FileQuerySearchTypeRegex:
-		query = query.Where("name &~ ?", filesQuery.Query.Value)
+		if afb.pgroonga {
+			query = query.Where("name &~ ?", filesQuery.Query.Value)
+		} else {
+			query = query.Where("name ~ ?", filesQuery.Query.Value)
+		}
 	}
 	return query
 }

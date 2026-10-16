@@ -18,6 +18,7 @@ import (
 	"github.com/tgdrive/teldrive/internal/auth"
 	"github.com/tgdrive/teldrive/internal/cache"
 	"github.com/tgdrive/teldrive/internal/config"
+	"github.com/tgdrive/teldrive/internal/database"
 	"github.com/tgdrive/teldrive/internal/events"
 	"github.com/tgdrive/teldrive/internal/logging"
 	"github.com/tgdrive/teldrive/internal/tgc"
@@ -35,6 +36,9 @@ type apiService struct {
 	events         events.EventBroadcaster
 	channelManager *tgc.ChannelManager
 	dedup          *dedupManager
+	// pgroonga is true when the pgroonga extension is installed. It selects
+	// pgroonga operators (&@~, &~) vs stock fallbacks (ILIKE, ~) in search.
+	pgroonga bool
 	// zipSlots caps how many archives stream at once. nil when the limit is
 	// disabled.
 	zipSlots chan struct{}
@@ -209,6 +213,7 @@ func NewApiService(db *gorm.DB,
 		events:         events,
 		channelManager: tgc.NewChannelManager(db, cache, &cnf.TG),
 		dedup:          newDedupManager(),
+		pgroonga:       database.HasPGroonga(db),
 		zipSlots:       zipSlots,
 	}
 }

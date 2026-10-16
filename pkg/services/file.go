@@ -1406,7 +1406,7 @@ func (a *apiService) streamZip(ctx context.Context, userId int64, tgSession stri
 func (a *apiService) FilesList(ctx context.Context, params api.FilesListParams) (*api.FileList, error) {
 	userId := auth.GetUser(ctx)
 
-	queryBuilder := &fileQueryBuilder{db: a.db}
+	queryBuilder := &fileQueryBuilder{db: a.db, pgroonga: a.pgroonga}
 
 	return queryBuilder.execute(&params, userId)
 }

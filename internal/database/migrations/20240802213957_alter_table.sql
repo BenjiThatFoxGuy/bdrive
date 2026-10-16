@@ -61,7 +61,14 @@ DROP FUNCTION IF EXISTS teldrive.get_file_from_path;
 
 CREATE INDEX idx_files_category_type_user_id ON teldrive.files USING btree (category, type, user_id);
 CREATE INDEX idx_files_name ON teldrive.files USING btree (name);
-CREATE INDEX idx_files_name_search ON teldrive.files USING pgroonga (regexp_replace(name, '[.,-_]'::text, ' '::text, 'g'::text)) WITH (tokenizer='TokenNgram');
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_available_extensions WHERE name = 'pgroonga') THEN
+    CREATE EXTENSION IF NOT EXISTS pgroonga;
+    CREATE INDEX idx_files_name_search ON teldrive.files USING pgroonga (regexp_replace(name, '[.,-_]'::text, ' '::text, 'g'::text)) WITH (tokenizer='TokenNgram');
+  END IF;
+END
+$$;
 CREATE INDEX idx_files_name_user_id_status ON teldrive.files USING btree (name, user_id, status);
 CREATE INDEX idx_files_parent_id ON teldrive.files USING btree (parent_id);
 CREATE INDEX idx_files_starred_updated_at ON teldrive.files USING btree (starred, updated_at DESC);

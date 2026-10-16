@@ -140,6 +140,20 @@ func TestLargeDatasetPerformance(t *testing.T) {
 	// Update statistics for accurate query planning
 	perfDB.Exec("VACUUM ANALYZE teldrive.files")
 
+	// Search predicates follow the same pgroonga-optional logic as prod code
+	// (see fileQueryBuilder.applySearchQuery): pgroonga operators when the
+	// extension is installed, stock fallbacks otherwise.
+	textPred := "teldrive.clean_name(name) &@~ teldrive.clean_name(?)"
+	regexPred := "name &~ ?"
+	namePred := "name &@~ ?"
+	textLabel := "PGroonga"
+	if !database.HasPGroonga(perfDB) {
+		textPred = "teldrive.clean_name(name) ILIKE '%' || teldrive.clean_name(?) || '%'"
+		regexPred = "name ~ ?"
+		namePred = "name ILIKE '%' || ? || '%'"
+		textLabel = "Fallback"
+	}
+
 	queries := []struct {
 		name  string
 		query string
@@ -301,20 +315,20 @@ func TestLargeDatasetPerformance(t *testing.T) {
 
 		// --- Search ---
 		{
-			name: "Search by Name (PGroonga Text - Function)",
+			name: "Search by Name (" + textLabel + " Text - Function)",
 			query: `
 				EXPLAIN ANALYZE SELECT * FROM teldrive.files
 				WHERE user_id = ? AND status = 'active'
-				AND teldrive.clean_name(name) &@~ teldrive.clean_name(?)
+				AND ` + textPred + `
 				LIMIT 20
 			`,
 			args: []any{userID, "file_4999"},
 		},
 		{
-			name: "Search by Name (PGroonga Regex)",
+			name: "Search by Name (" + textLabel + " Regex)",
 			query: `
 				EXPLAIN ANALYZE SELECT * FROM teldrive.files
-				WHERE user_id = ? AND status = 'active' AND name &~ ?
+				WHERE user_id = ? AND status = 'active' AND ` + regexPred + `
 				LIMIT 20
 			`,
 			args: []any{userID, "file_4999"},
@@ -323,7 +337,7 @@ func TestLargeDatasetPerformance(t *testing.T) {
 			name: "Search + Category (Image) + Deep Page",
 			query: `
 				EXPLAIN ANALYZE SELECT * FROM teldrive.files
-				WHERE user_id = ? AND status = 'active' AND category = 'image' AND name &@~ ?
+				WHERE user_id = ? AND status = 'active' AND category = 'image' AND ` + namePred + `
 				LIMIT 50 OFFSET 5000
 			`,
 			args: []any{userID, "file_100"},
@@ -332,7 +346,7 @@ func TestLargeDatasetPerformance(t *testing.T) {
 			name: "Search + Type (Folder) + Deep Page",
 			query: `
 				EXPLAIN ANALYZE SELECT * FROM teldrive.files
-				WHERE user_id = ? AND status = 'active' AND type = 'folder' AND name &@~ ?
+				WHERE user_id = ? AND status = 'active' AND type = 'folder' AND ` + namePred + `
 				LIMIT 20 OFFSET 5000
 			`,
 			args: []any{userID, "file_200"},
