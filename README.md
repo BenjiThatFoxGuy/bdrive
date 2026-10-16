@@ -48,6 +48,8 @@ This section tracks functional changes made in this fork relative to [tgdrive/te
 
 - **Changed: archive browsing config is now a master switch + per-format flags.** The single `files.enable-zip-browsing` flag has been replaced by a hierarchy: `files.enable-archive-browsing` (master switch, default on), plus per-format flags `files.enable-zip-browsing` (default **off**), `files.enable-cbz-browsing` (default on), and `files.enable-unitypkg-browsing` (default on). Each format requires both the master switch and its own flag to be enabled. Zip browsing now defaults to off since it's a heavier operation on arbitrary archives. ([bdrive#TBD](https://github.com/BenjiThatFoxGuy/bdrive))
 
+- **Changed: `pgroonga` is now optional.** Fresh installs on stock Postgres (without the `pgroonga` extension) no longer fail at migration time — pgroonga indexes are only created when `pg_available_extensions` offers the extension, and search auto-detects `pg_extension` at startup (`pgroonga.enabled` vs `pgroonga.disabled` log). With pgroonga, text search uses `&@~` and regex uses `&~` as before; without it, text falls back to `clean_name(name) ILIKE '%' || clean_name(?) || '%'` and regex to native `~`. Fallback is slower (no N-gram index) and literal-substring only, but the server boots and search works.
+
 ## Contributing
 
 Feel free to contribute to this project.See [CONTRIBUTING.md](CONTRIBUTING.md) for more information.

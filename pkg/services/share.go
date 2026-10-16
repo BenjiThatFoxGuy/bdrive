@@ -238,7 +238,7 @@ func (a *apiService) SharesListFiles(ctx context.Context, params api.SharesListF
 	fileType := share.Type
 
 	if fileType == api.FileShareInfoTypeFolder {
-		queryBuilder := &fileQueryBuilder{db: a.db}
+		queryBuilder := &fileQueryBuilder{db: a.db, pgroonga: a.pgroonga}
 		return queryBuilder.execute(&api.FilesListParams{
 			Path:      api.NewOptString(share.Path + params.Path.Or("")),
 			Limit:     params.Limit,

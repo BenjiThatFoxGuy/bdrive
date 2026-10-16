@@ -147,6 +147,13 @@ func runApplication(ctx context.Context, conf *config.ServerCmdConfig) {
 		os.Exit(1)
 	}
 
+	if database.HasPGroonga(db) {
+		lg.Info("pgroonga.enabled", zap.String("search", "pgroonga"))
+	} else {
+		lg.Info("pgroonga.disabled", zap.String("search", "fallback"),
+			zap.String("reason", "pgroonga extension not installed, using ILIKE/regex fallback"))
+	}
+
 	// Wait for cache to be ready before setting up server
 	select {
 	case <-redisReady:
