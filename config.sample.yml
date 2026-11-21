@@ -29,6 +29,15 @@ files:
   zip-max-files: 10000
   zip-max-size: 0
   zip-max-concurrent: 4
+  cache:
+    enabled: false
+    memory-max-mb: 2048
+    memory-max-file-mb: 256
+    memory-ttl-minutes: 60
+    disk-enabled: true
+    disk-path: "/var/cache/teldrive"
+    disk-max-mb: 20480
+    disk-ttl-minutes: 1440
 
 jwt:
   session-time: "30d"

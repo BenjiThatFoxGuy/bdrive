@@ -21,8 +21,8 @@ import (
 	"github.com/tgdrive/teldrive/internal/crypt"
 	"github.com/tgdrive/teldrive/internal/logging"
 	"github.com/tgdrive/teldrive/internal/reader"
-	"github.com/tgdrive/teldrive/internal/thumbnail"
 	"github.com/tgdrive/teldrive/internal/tgc"
+	"github.com/tgdrive/teldrive/internal/thumbnail"
 	"github.com/tgdrive/teldrive/pkg/models"
 	"github.com/tgdrive/teldrive/pkg/types"
 	"go.uber.org/zap"
@@ -93,10 +93,51 @@ func (e *extendedService) FileThumbnail(w http.ResponseWriter, r *http.Request, 
 	e.generateThumb(w, r, file, session, logger)
 }
 
+// openForThumbnail returns a reader over the whole decrypted file, preferring
+// the local cache so a repeat thumbnail does not re-download the video.
+func (e *extendedService) openForThumbnail(ctx context.Context, client *telegram.Client, file *models.File, botID string) (io.Reader, io.Closer, error) {
+	if cached, ok := e.openCachedFile(file.ID, 0, *file.Size); ok {
+		return cached, cached, nil
+	}
+	fileParts, err := getParts(ctx, client, e.api.cache, file)
+	if err != nil {
+		return nil, nil, err
+	}
+	lr, err := reader.NewReader(ctx, client.API(), e.api.cache, file, fileParts, 0, *file.Size-1, &e.api.cnf.TG, botID)
+	if err != nil {
+		return nil, nil, err
+	}
+	return lr, lr, nil
+}
+
 // serveCachedThumb downloads a previously-generated thumbnail from Telegram and
 // serves it through the Source handler (Range + HEAD support for imgproxy).
 func (e *extendedService) serveCachedThumb(w http.ResponseWriter, r *http.Request, thumb *models.Thumbnail, session *models.Session, logger *zap.Logger) {
 	ctx := r.Context()
+	cacheKey := "thumb:" + thumb.FileId
+
+	serve := func(data []byte) {
+		setEdgeCache(w, streamEdgeCacheSeconds(r))
+		w.Header().Set("ETag", `"`+thumb.FileId+`"`)
+		w.Header().Set("Content-Type", "image/jpeg")
+		thumbnail.NewSource(int64(len(data)), func(_ context.Context, start, end int64) (io.ReadCloser, error) {
+			return io.NopCloser(bytes.NewReader(data[start : end+1])), nil
+		}).ServeHTTP(w, r)
+	}
+
+	// A thumbnail already generated once is kept locally, so imgproxy and repeat
+	// views do not download it from Telegram again.
+	if e.api.fileCache != nil && e.api.fileCache.Enabled() {
+		if entry, ok := e.api.fileCache.Open(cacheKey); ok {
+			data, err := io.ReadAll(entry)
+			entry.Close()
+			if err == nil {
+				serve(data)
+				return
+			}
+			logger.Warn("thumb.cache_read_failed", zap.Error(err))
+		}
+	}
 
 	client, token, botID, err := e.resolveStreamClient(ctx, session)
 	if err != nil {
@@ -145,12 +186,19 @@ func (e *extendedService) serveCachedThumb(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	w.Header().Set("Cache-Control", "public, max-age=86400")
-	w.Header().Set("ETag", `"`+thumb.FileId+`"`)
-	w.Header().Set("Content-Type", "image/jpeg")
-	thumbnail.NewSource(int64(len(data)), func(_ context.Context, start, end int64) (io.ReadCloser, error) {
-		return io.NopCloser(bytes.NewReader(data[start : end+1])), nil
-	}).ServeHTTP(w, r)
+	if e.api.fileCache != nil && e.api.fileCache.Enabled() {
+		if cw, err := e.api.fileCache.Store(cacheKey, int64(len(data))); err == nil {
+			_, werr := cw.Write(data)
+			if werr == nil {
+				werr = cw.Close()
+			}
+			if werr != nil {
+				logger.Warn("thumb.cache_store_failed", zap.Error(werr))
+			}
+		}
+	}
+
+	serve(data)
 }
 
 // generateThumb downloads the video, runs ffmpeg, caches the result in
@@ -179,22 +227,17 @@ func (e *extendedService) generateThumb(w http.ResponseWriter, r *http.Request, 
 
 	tgc.RunWithAuth(ctx, client, token, func(ctx context.Context) error {
 		go func() {
-			// Download full video.
-			fileParts, err := getParts(ctx, client, e.api.cache, file)
+			// A cached copy of the video skips the Telegram download entirely, so
+			// generating a thumbnail twice costs nothing the second time.
+			src, closeSrc, err := e.openForThumbnail(ctx, client, file, botID)
 			if err != nil {
 				ch <- result{err: err}
 				return
 			}
-
-			lr, err := reader.NewReader(ctx, client.API(), e.api.cache, file, fileParts, 0, *file.Size-1, &e.api.cnf.TG, botID)
-			if err != nil {
-				ch <- result{err: err}
-				return
-			}
-			defer lr.Close()
+			defer closeSrc.Close()
 
 			// Generate JPEG thumbnail via ffmpeg.
-			jpegBytes, err := thumbGenerator.Generate(ctx, lr, *file.Size)
+			jpegBytes, err := thumbGenerator.Generate(ctx, src, *file.Size)
 			if err != nil {
 				ch <- result{err: err}
 				return
