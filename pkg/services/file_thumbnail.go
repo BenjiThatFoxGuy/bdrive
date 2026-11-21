@@ -29,7 +29,7 @@ import (
 )
 
 // thumbGenerator is shared across requests so the concurrency semaphore works.
-var thumbGenerator = thumbnail.NewGenerator(500*1024*1024, 30*time.Second, 2)
+var thumbGenerator = thumbnail.NewGenerator(0, 2*time.Minute, 2)
 
 // FileThumbnail serves (or generates on-demand) a JPEG thumbnail for a video
 // file. imgproxy fetches this endpoint and resizes the result for the UI.
@@ -201,8 +201,10 @@ func (e *extendedService) serveCachedThumb(w http.ResponseWriter, r *http.Reques
 	serve(data)
 }
 
-// generateThumb downloads the video, runs ffmpeg, caches the result in
-// Telegram, persists the DB record, and serves the JPEG.
+// generateThumb generates a JPEG thumbnail for a video file. For unencrypted
+// files it gives ffmpeg the public stream URL directly, so the whole Telegram
+// download pipeline is bypassed. Encrypted files still need the full MTProto
+// download because ffmpeg cannot decrypt them.
 func (e *extendedService) generateThumb(w http.ResponseWriter, r *http.Request, file *models.File, session *models.Session, logger *zap.Logger) {
 	ctx := r.Context()
 
@@ -210,6 +212,23 @@ func (e *extendedService) generateThumb(w http.ResponseWriter, r *http.Request, 
 		http.Error(w, "empty file", http.StatusBadRequest)
 		return
 	}
+
+	// --- Unencrypted path: ffmpeg reads the public stream URL directly ---
+	if !file.IsEncrypted() && e.api.cnf.Server.BaseURL != "" {
+		streamURL := e.buildStreamURL(file, session)
+		logger.Debug("thumb.url_mode", zap.String("url", streamURL))
+
+		jpegBytes, err := thumbGenerator.GenerateFromURL(ctx, streamURL)
+		if err != nil {
+			logger.Warn("thumb.url_failed, falling back to mtproto", zap.Error(err))
+			// Fall through to the MTProto path below.
+		} else {
+			e.finishThumb(ctx, w, r, file, session, jpegBytes, logger)
+			return
+		}
+	}
+
+	// --- MTProto path (encrypted files or URL fallback) ---
 
 	client, token, botID, err := e.resolveStreamClient(ctx, session)
 	if err != nil {
@@ -247,53 +266,7 @@ func (e *extendedService) generateThumb(w http.ResponseWriter, r *http.Request, 
 				return
 			}
 
-			uploadData := jpegBytes
-			var salt string
-			if file.IsEncrypted() {
-				saltBytes := make([]byte, 16)
-				if _, err := rand.Read(saltBytes); err != nil {
-					ch <- result{err: err}
-					return
-				}
-				salt = base64.StdEncoding.EncodeToString(saltBytes)
-				cipher, err := crypt.NewCipher(e.api.cnf.TG.Uploads.EncryptionKey, salt)
-				if err != nil {
-					ch <- result{err: err}
-					return
-				}
-				enc, err := cipher.EncryptData(bytes.NewReader(jpegBytes))
-				if err != nil {
-					ch <- result{err: err}
-					return
-				}
-				uploadData, err = io.ReadAll(enc)
-				if err != nil {
-					ch <- result{err: err}
-					return
-				}
-			}
-
-			msgID, err := uploadThumbToChannel(ctx, client.API(), *file.ChannelId, uploadData, e.api.cnf.TG.Uploads.Threads)
-			if err != nil {
-				ch <- result{err: err}
-				return
-			}
-
-			thumb := models.Thumbnail{
-				FileId:    file.ID,
-				UserId:    session.UserId,
-				ChannelId: *file.ChannelId,
-				MessageId: msgID,
-				Encrypted: file.IsEncrypted(),
-				Salt:      salt,
-				Size:      int64(len(uploadData)),
-				MimeType:  "image/jpeg",
-			}
-			if dbErr := e.api.db.Create(&thumb).Error; dbErr != nil {
-				logger.Error("thumb.db_save_failed", zap.Error(dbErr))
-			}
-
-			ch <- result{jpeg: jpegBytes, msgID: msgID}
+			ch <- result{jpeg: jpegBytes}
 		}()
 
 		// Keep the client alive until the goroutine finishes.
@@ -308,12 +281,7 @@ func (e *extendedService) generateThumb(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 
-	w.Header().Set("Cache-Control", "public, max-age=86400")
-	w.Header().Set("ETag", `"`+file.ID+`"`)
-	w.Header().Set("Content-Type", "image/jpeg")
-	thumbnail.NewSource(int64(len(res.jpeg)), func(_ context.Context, start, end int64) (io.ReadCloser, error) {
-		return io.NopCloser(bytes.NewReader(res.jpeg[start : end+1])), nil
-	}).ServeHTTP(w, r)
+	e.finishThumb(ctx, w, r, file, session, res.jpeg, logger)
 }
 
 // resolveStreamClient creates a Telegram client for streaming/downloading,
@@ -350,6 +318,108 @@ func (e *extendedService) resolveStreamClient(ctx context.Context, session *mode
 		}
 	}
 	return client, token, botID, nil
+}
+
+// buildStreamURL constructs the public ephemeral URL for a file, the same one
+// the browser gets from "copy link". It uses the session hash for auth so the
+// stream endpoint authenticates without cookies.
+func (e *extendedService) buildStreamURL(file *models.File, session *models.Session) string {
+	base := strings.TrimRight(e.api.cnf.Server.BaseURL, "/")
+	u := fmt.Sprintf("%s/api/files/%s/%s?hash=%s",
+		base,
+		file.ID,
+		file.Name,
+		session.Hash,
+	)
+	return u
+}
+
+// finishThumb uploads the generated JPEG to Telegram, persists the DB record,
+// caches the bytes locally, and serves the response. Shared between the URL
+// path and the MTProto path.
+func (e *extendedService) finishThumb(ctx context.Context, w http.ResponseWriter, r *http.Request, file *models.File, session *models.Session, jpegBytes []byte, logger *zap.Logger) {
+	uploadData := jpegBytes
+	var salt string
+
+	if file.IsEncrypted() {
+		saltBytes := make([]byte, 16)
+		if _, err := rand.Read(saltBytes); err != nil {
+			logger.Error("thumb.encrypt_failed", zap.Error(err))
+			http.Error(w, "thumbnail encryption failed", http.StatusInternalServerError)
+			return
+		}
+		salt = base64.StdEncoding.EncodeToString(saltBytes)
+		cipher, err := crypt.NewCipher(e.api.cnf.TG.Uploads.EncryptionKey, salt)
+		if err != nil {
+			logger.Error("thumb.cipher_failed", zap.Error(err))
+			http.Error(w, "thumbnail encryption failed", http.StatusInternalServerError)
+			return
+		}
+		enc, err := cipher.EncryptData(bytes.NewReader(jpegBytes))
+		if err != nil {
+			logger.Error("thumb.encrypt_data_failed", zap.Error(err))
+			http.Error(w, "thumbnail encryption failed", http.StatusInternalServerError)
+			return
+		}
+		var encErr error
+		uploadData, encErr = io.ReadAll(enc)
+		if encErr != nil {
+			logger.Error("thumb.encrypt_read_failed", zap.Error(encErr))
+			http.Error(w, "thumbnail encryption failed", http.StatusInternalServerError)
+			return
+		}
+	}
+
+	// Upload to the same channel - needs a gotd client for the API call.
+	client, token, _, err := e.resolveStreamClient(ctx, session)
+	if err != nil {
+		logger.Error("thumb.upload_client_failed", zap.Error(err))
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	var msgID int
+	tgc.RunWithAuth(ctx, client, token, func(ctx context.Context) error {
+		var uploadErr error
+		msgID, uploadErr = uploadThumbToChannel(ctx, client.API(), *file.ChannelId, uploadData, e.api.cnf.TG.Uploads.Threads)
+		return uploadErr
+	})
+
+	if msgID == 0 {
+		logger.Error("thumb.upload_failed")
+		http.Error(w, "thumbnail upload failed", http.StatusInternalServerError)
+		return
+	}
+
+	thumb := models.Thumbnail{
+		FileId:    file.ID,
+		UserId:    session.UserId,
+		ChannelId: *file.ChannelId,
+		MessageId: msgID,
+		Encrypted: file.IsEncrypted(),
+		Salt:      salt,
+		Size:      int64(len(uploadData)),
+		MimeType:  "image/jpeg",
+	}
+	if dbErr := e.api.db.Create(&thumb).Error; dbErr != nil {
+		logger.Error("thumb.db_save_failed", zap.Error(dbErr))
+	}
+
+	// Cache locally.
+	if e.api.fileCache != nil && e.api.fileCache.Enabled() {
+		cacheKey := "thumb:" + file.ID
+		if cw, cwErr := e.api.fileCache.Store(cacheKey, int64(len(jpegBytes))); cwErr == nil {
+			cw.Write(jpegBytes)
+			cw.Close()
+		}
+	}
+
+	setEdgeCache(w, streamEdgeCacheSeconds(r))
+	w.Header().Set("ETag", `"`+file.ID+`"`)
+	w.Header().Set("Content-Type", "image/jpeg")
+	thumbnail.NewSource(int64(len(jpegBytes)), func(_ context.Context, start, end int64) (io.ReadCloser, error) {
+		return io.NopCloser(bytes.NewReader(jpegBytes[start : end+1])), nil
+	}).ServeHTTP(w, r)
 }
 
 // uploadThumbToChannel uploads a small blob to a Telegram channel and returns
