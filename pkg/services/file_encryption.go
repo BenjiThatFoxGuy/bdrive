@@ -5,7 +5,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"net/http"
 	"time"
 
 	"github.com/go-faster/errors"
@@ -191,26 +190,12 @@ func (a *apiService) transformFile(ctx context.Context, fileID string, encrypt b
 	return nil
 }
 
-// FileTransformHandler handles POST /api/files/transform/{id}?mode=encrypt|decrypt.
-func (a *apiService) FileTransformHandler(w http.ResponseWriter, r *http.Request, fileID string) {
-	ctx, err := auth.FromRequest(r.Context(), a.db, a.cache, a.cnf.JWT.Secret, r)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusUnauthorized)
-		return
+// FilesTransform implements the generated handler for POST /files/{id}/transform.
+func (a *apiService) FilesTransform(ctx context.Context, params api.FilesTransformParams) error {
+	if err := a.transformFile(ctx, params.ID, params.Mode == api.FilesTransformModeEncrypt); err != nil {
+		logging.Component("FILE").Error("transform.failed",
+			zap.Error(err), zap.String("file_id", params.ID))
+		return err
 	}
-
-	mode := r.URL.Query().Get("mode")
-	if mode != "encrypt" && mode != "decrypt" {
-		http.Error(w, "mode must be encrypt or decrypt", http.StatusBadRequest)
-		return
-	}
-
-	if err := a.transformFile(ctx, fileID, mode == "encrypt"); err != nil {
-		logger := logging.Component("FILE")
-		logger.Error("transform.failed", zap.Error(err), zap.String("file_id", fileID))
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	w.WriteHeader(http.StatusNoContent)
+	return nil
 }

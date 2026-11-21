@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gotd/td/telegram"
@@ -31,6 +32,17 @@ import (
 
 // thumbGenerator is shared across requests so the concurrency semaphore works.
 var thumbGenerator = thumbnail.NewGenerator(0, 2*time.Minute, 2)
+
+// Per-file generation locks. Concurrent thumbnail requests for the same file
+// block here instead of each uploading their own copy to Telegram. After the
+// lock is acquired the DB is re-checked, so the waiter serves the thumbnail
+// the first caller just created.
+var thumbLocks sync.Map // fileID -> *sync.Mutex
+
+func thumbLockFor(fileID string) *sync.Mutex {
+	l, _ := thumbLocks.LoadOrStore(fileID, &sync.Mutex{})
+	return l.(*sync.Mutex)
+}
 
 // FileThumbnail serves (or generates on-demand) a JPEG thumbnail for a video
 // file. imgproxy fetches this endpoint and resizes the result for the UI.
@@ -85,6 +97,17 @@ func (e *extendedService) FileThumbnail(w http.ResponseWriter, r *http.Request, 
 
 	// --- Check for cached thumbnail ---
 	var thumb models.Thumbnail
+	if err := e.api.db.Where("file_id = ?", fileId).First(&thumb).Error; err == nil {
+		e.serveCachedThumb(w, r, &thumb, session, logger)
+		return
+	}
+
+	// --- Serialize generation per file to avoid duplicate uploads ---
+	lock := thumbLockFor(fileId)
+	lock.Lock()
+	defer lock.Unlock()
+
+	// Re-check inside the lock: another request may have just generated it.
 	if err := e.api.db.Where("file_id = ?", fileId).First(&thumb).Error; err == nil {
 		e.serveCachedThumb(w, r, &thumb, session, logger)
 		return

@@ -349,9 +349,6 @@ func setupServer(cfg *config.ServerCmdConfig, db *gorm.DB, cache cache.Cacher, l
 	mux.Post("/api/bots/cleanup", func(w http.ResponseWriter, r *http.Request) {
 		apiSrv.BotTokenCleanupHandler(w, r)
 	})
-	mux.Post("/api/files/transform/{id}", func(w http.ResponseWriter, r *http.Request) {
-		apiSrv.FileTransformHandler(w, r, chi.URLParam(r, "id"))
-	})
 	mux.Mount("/api/resolve", apiNoStore(apiSrv.ResolveRouter()))
 	mux.Mount("/api/", http.StripPrefix("/api", apiNoStore(extendedSrv)))
 
