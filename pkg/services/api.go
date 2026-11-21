@@ -13,6 +13,7 @@ import (
 	"github.com/gotd/contrib/storage"
 	"github.com/gotd/td/telegram"
 	"github.com/gotd/td/telegram/query/dialogs"
+	"github.com/gotd/td/tg"
 	"github.com/gotd/td/tgerr"
 	"github.com/ogen-go/ogen/ogenerrors"
 	"go.uber.org/zap"
@@ -30,6 +31,7 @@ import (
 	"github.com/tgdrive/teldrive/internal/utils"
 	"github.com/tgdrive/teldrive/internal/version"
 	"github.com/tgdrive/teldrive/pkg/models"
+	"github.com/tgdrive/teldrive/pkg/types"
 	"gorm.io/gorm"
 )
 
@@ -384,6 +386,10 @@ func (a *apiService) BotTokenCleanup(ctx context.Context) (*BotTokenCleanupResul
 			if userName == "" {
 				userName = info.UserName
 			}
+			// A working token: bring its stored records up to date. GetBotInfo
+			// re-authenticated against Telegram just now, so the bot's gotd
+			// session is refreshed too.
+			a.refreshBotRecord(ctx, userId, peerStorage, bot, info)
 			result.Valid = append(result.Valid, BotTokenInfo{
 				BotId:    botID,
 				UserName: userName,
@@ -416,6 +422,35 @@ func (a *apiService) BotTokenCleanup(ctx context.Context) (*BotTokenCleanupResul
 	}
 
 	return result, nil
+}
+
+// refreshBotRecord brings a valid bot's stored metadata up to date.
+//
+// The bot id is corrected when an older row was saved as zero, and the peer is
+// (re)written so a later cleanup can name the bot instead of reporting
+// "unknown username". Re-authenticating the token also refreshes the bot's gotd
+// session in the database-backed session storage.
+func (a *apiService) refreshBotRecord(ctx context.Context, userId int64, peerStorage *tgstorage.PeerStorage, bot models.Bot, info *types.BotInfo) {
+	logger := logging.Component("API")
+
+	if info.Id != 0 && info.Id != bot.BotId {
+		if err := a.db.Model(&models.Bot{}).
+			Where("user_id = ? AND token = ?", userId, bot.Token).
+			Update("bot_id", info.Id).Error; err != nil {
+			logger.Warn("bot.bot_id_refresh_failed", zap.Error(err))
+		}
+	}
+	if info.Id == 0 {
+		return
+	}
+
+	peer := storage.Peer{
+		Key:  dialogs.DialogKey{Kind: dialogs.User, ID: info.Id},
+		User: &tg.User{ID: info.Id, AccessHash: info.AccessHash, Username: info.UserName, Bot: true},
+	}
+	if err := peerStorage.Add(ctx, peer); err != nil {
+		logger.Warn("bot.peer_refresh_failed", zap.Error(err))
+	}
 }
 
 // knownBotUsername returns the last username cached for a bot peer, if any.
