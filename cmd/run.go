@@ -267,7 +267,7 @@ func setupServer(cfg *config.ServerCmdConfig, db *gorm.DB, cache cache.Cacher, l
 
 	apiSrv := services.NewApiService(db, cfg, cache, botSelector, eventBroadcaster)
 
-	srv, err := api.NewServer(apiSrv, auth.NewSecurityHandler(db, cache, &cfg.JWT))
+	srv, err := api.NewServer(apiSrv, auth.NewSecurityHandler(db, cache, &cfg.JWT), api.WithErrorHandler(auth.HTTPErrorHandler))
 
 	if err != nil {
 		lg.Error("failed to create server", zap.Error(err))

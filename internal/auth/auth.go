@@ -2,8 +2,12 @@ package auth
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
+	"time"
+
+	"github.com/tgdrive/teldrive/internal/admission"
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/ogen-go/ogen/ogenerrors"
@@ -58,24 +62,55 @@ func GetJWTUser(c context.Context) *types.JWTClaims {
 	return authUser
 }
 
-func VerifyUser(ctx context.Context, db *gorm.DB, cache cache.Cacher, secret, authCookie string) (*types.JWTClaims, error) {
-	claims, err := Decode(secret, authCookie)
+var ErrUnavailable = errors.New("authentication dependency unavailable")
 
+var sessionAdmission = admission.New(1, 2, time.Now)
+
+func VerifyUser(ctx context.Context, db *gorm.DB, cacher cache.Cacher, secret, authCookie string) (*types.JWTClaims, error) {
+	return verifyUser(ctx, secret, authCookie, func(ctx context.Context, hash string) (*models.Session, error) {
+		return GetSessionByHash(ctx, db, cacher, hash)
+	})
+}
+
+func verifyUser(ctx context.Context, secret, authCookie string, lookup func(context.Context, string) (*models.Session, error)) (*types.JWTClaims, error) {
+	claims, err := Decode(secret, authCookie)
 	if err != nil {
 		return nil, err
 	}
-
-	var session *models.Session
-
-	session, err = GetSessionByHash(ctx, db, cache, claims.Hash)
-
-	if err != nil {
-		return nil, fmt.Errorf("invalid session")
+	id, err := strconv.ParseInt(claims.Subject, 10, 64)
+	if err != nil || id <= 0 {
+		return nil, errors.New("invalid token subject")
 	}
-
+	session, err := lookup(ctx, claims.Hash)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, errors.New("invalid session")
+		}
+		return nil, fmt.Errorf("%w: %w", ErrUnavailable, err)
+	}
+	if session == nil || session.UserId != id {
+		return nil, errors.New("invalid session")
+	}
 	claims.TgSession = session.Session
-
 	return claims, nil
+}
+
+// Only a bounded number of requests can probe an unavailable session database.
+// A restart does not launch one initialization attempt per reconnecting mount request.
+func lookupSession(ctx context.Context, query func(context.Context) error) error {
+	finish, err := sessionAdmission.Begin(ctx, "sessions")
+	if err != nil {
+		return fmt.Errorf("%w: %w", ErrUnavailable, err)
+	}
+	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	err = query(ctx)
+	failed := err != nil && !errors.Is(err, gorm.ErrRecordNotFound) && !errors.Is(err, context.Canceled)
+	finish(failed)
+	if failed {
+		return fmt.Errorf("%w: %w", ErrUnavailable, err)
+	}
+	return err
 }
 
 func GetSessionByHash(ctx context.Context, db *gorm.DB, cache cache.Cacher, hash string) (*models.Session, error) {
@@ -85,7 +120,9 @@ func GetSessionByHash(ctx context.Context, db *gorm.DB, cache cache.Cacher, hash
 	err := cache.Get(ctx, key, &session)
 
 	if err != nil {
-		if err := db.Model(&models.Session{}).Where("hash = ?", hash).First(&session).Error; err != nil {
+		if err := lookupSession(ctx, func(ctx context.Context) error {
+			return db.WithContext(ctx).Model(&models.Session{}).Where("hash = ?", hash).First(&session).Error
+		}); err != nil {
 			return nil, err
 		}
 		cache.Set(ctx, key, &session, 0)
@@ -108,8 +145,10 @@ func GetSessionByUserId(ctx context.Context, db *gorm.DB, cacher cache.Cacher, u
 	key := cache.KeySessionUser(userId)
 
 	if err := cacher.Get(ctx, key, &session); err != nil {
-		if err := db.Model(&models.Session{}).Where("user_id = ?", userId).
-			Order("created_at desc").First(&session).Error; err != nil {
+		if err := lookupSession(ctx, func(ctx context.Context) error {
+			return db.WithContext(ctx).Model(&models.Session{}).Where("user_id = ?", userId).
+				Order("created_at desc").First(&session).Error
+		}); err != nil {
 			return nil, err
 		}
 		cacher.Set(ctx, key, &session, 0)

@@ -20,7 +20,6 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/tgdrive/teldrive/internal/api"
 	"github.com/tgdrive/teldrive/internal/appcontext"
-	"github.com/tgdrive/teldrive/internal/psdconv"
 	"github.com/tgdrive/teldrive/internal/auth"
 	"github.com/tgdrive/teldrive/internal/cache"
 	"github.com/tgdrive/teldrive/internal/category"
@@ -30,6 +29,7 @@ import (
 	"github.com/tgdrive/teldrive/internal/http_range"
 	"github.com/tgdrive/teldrive/internal/logging"
 	"github.com/tgdrive/teldrive/internal/md5"
+	"github.com/tgdrive/teldrive/internal/psdconv"
 	"github.com/tgdrive/teldrive/internal/reader"
 	"github.com/tgdrive/teldrive/internal/tgc"
 	"github.com/tgdrive/teldrive/internal/utils"
@@ -1737,7 +1737,13 @@ func (a *apiService) FilesUpdate(ctx context.Context, req *api.FileUpdate, param
 }
 
 func (e *extendedService) FilesStream(w http.ResponseWriter, r *http.Request, fileId string, userId int64) {
-	ctx := r.Context()
+	ctx, cancel := context.WithCancel(r.Context())
+	defer cancel()
+	// Bound initialization only. Once the first bytes are ready, the stream may
+	// run for as long as the caller remains connected.
+	setupTimer := time.AfterFunc(15*time.Second, cancel)
+	defer setupTimer.Stop()
+	r = r.WithContext(ctx)
 	logger := logging.Component("FILE").With(
 		zap.String("file_id", fileId),
 		zap.Int64("user_id", userId),
@@ -1758,37 +1764,60 @@ func (e *extendedService) FilesStream(w http.ResponseWriter, r *http.Request, fi
 			}
 			user, err = auth.VerifyUser(ctx, e.api.db, e.api.cache, e.api.cnf.JWT.Secret, cookie.Value)
 			if err != nil {
-				http.Error(w, "invalid token", http.StatusUnauthorized)
+				writeStreamAuthError(w, err)
+				return
 			}
 			userId, _ := strconv.ParseInt(user.Subject, 10, 64)
 			session = &models.Session{UserId: userId, Session: user.TgSession}
 		} else {
 			session, err = auth.GetSessionByHash(ctx, e.api.db, e.api.cache, authHash)
 			if err != nil {
-				http.Error(w, "invalid hash", http.StatusBadRequest)
+				writeStreamAuthError(w, err)
 				return
 			}
 		}
 	} else {
-		// Share path: the viewer has no credentials of their own, so fall back to
-		// the owner's session. Leaving Session empty here means AuthClient gets an
-		// empty session string and fails outright once the owner has no bots.
 		session = &models.Session{UserId: userId}
-		if owner, err := auth.GetSessionByUserId(ctx, e.api.db, e.api.cache, userId); err == nil {
+		owner, lookupErr := auth.GetSessionByUserId(ctx, e.api.db, e.api.cache, userId)
+		if lookupErr != nil && !errors.Is(lookupErr, gorm.ErrRecordNotFound) {
+			writeStreamAuthError(w, lookupErr)
+			return
+		}
+		if owner != nil {
 			session.Session = owner.Session
 		}
 	}
+	// Protect DB and Telegram setup separately from long-running stream bodies.
+	finish, err := streamSetupAdmission.Begin(ctx, fmt.Sprintf("owner:%d", session.UserId))
+	if err != nil {
+		writeStreamError(w, err)
+		return
+	}
+	setupFailed := false
+	defer func() { finish(setupFailed) }()
+	fileKey := fmt.Sprintf("file:%d:%s", session.UserId, fileId)
+	finishFile, err := streamSetupAdmission.Begin(ctx, fileKey)
+	if err != nil {
+		writeStreamError(w, err)
+		return
+	}
+	defer func() { finishFile(false) }()
 
 	file, err := cache.Fetch(ctx, e.api.cache, cache.Key("files", fileId), 0, func() (*models.File, error) {
 		var result models.File
-		if err := e.api.db.Model(&result).Where("id = ?", fileId).First(&result).Error; err != nil {
+		if err := e.api.db.WithContext(ctx).Model(&result).Where("id = ?", fileId).First(&result).Error; err != nil {
 			return nil, err
 		}
 		return &result, nil
 	})
 
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		setupFailed = streamStatus(err) == 503
+		writeStreamError(w, err)
+		return
+	}
+	if err := file.ValidateStream(); err != nil {
+		writeStreamError(w, err)
 		return
 	}
 
@@ -1841,121 +1870,87 @@ func (e *extendedService) FilesStream(w http.ResponseWriter, r *http.Request, fi
 	}
 
 	contentLength := end - start + 1
-
-	w.Header().Set("Content-Type", contentType)
-
-	w.Header().Set("Content-Length", strconv.FormatInt(contentLength, 10))
-	w.Header().Set("ETag", fmt.Sprintf("\"%s\"", md5.FromString(fileId+strconv.FormatInt(*file.Size, 10))))
-	w.Header().Set("Last-Modified", file.UpdatedAt.UTC().Format(http.TimeFormat))
-
-	disposition := "inline"
-
-	download := r.URL.Query().Get("download") == "1"
-
-	if download {
-		disposition = "attachment"
+	prepare := func() {
+		setupTimer.Stop()
+		finish(false)
+		finishFile(false)
+		w.Header().Set("Content-Type", contentType)
+		w.Header().Set("Content-Length", strconv.FormatInt(contentLength, 10))
+		w.Header().Set("ETag", fmt.Sprintf("\"%s\"", md5.FromString(fileId+strconv.FormatInt(*file.Size, 10))))
+		if file.UpdatedAt != nil {
+			w.Header().Set("Last-Modified", file.UpdatedAt.UTC().Format(http.TimeFormat))
+		}
+		disposition := "inline"
+		if r.URL.Query().Get("download") == "1" {
+			disposition = "attachment"
+		}
+		w.Header().Set("Content-Disposition", mime.FormatMediaType(disposition, map[string]string{"filename": file.Name}))
 	}
-
-	w.Header().Set("Content-Disposition", mime.FormatMediaType(disposition, map[string]string{"filename": file.Name}))
-
-	w.WriteHeader(status)
-
 	if r.Method == http.MethodHead {
+		prepare()
+		w.WriteHeader(status)
 		return
 	}
 
 	tokens, err := e.api.channelManager.BotTokens(ctx, session.UserId)
-
 	if err != nil {
-		logger.Error("stream.bots_fetch_failed", zap.Error(err))
-		http.Error(w, "failed to get bots", http.StatusInternalServerError)
+		setupFailed = true
+		writeStreamError(w, err)
 		return
 	}
-
-	// Limit the number of bots used for streaming if configured
 	if limit := e.api.cnf.TG.Stream.BotsLimit; limit > 0 && len(tokens) > limit {
 		tokens = tokens[:limit]
 	}
-
-	var (
-		lr     io.ReadCloser
-		client *telegram.Client
-		token  string
-	)
-
+	var client *telegram.Client
+	var token string
+	// Streaming setup is already admission-limited. Do not layer reconnect,
+	// flood-wait, or five-attempt recovery loops onto every mount request.
+	middlewares := tgc.NewMiddleware(&e.api.cnf.TG, tgc.WithRetry(1), tgc.WithRateLimit())
 	if len(tokens) == 0 {
-		client, err = tgc.AuthClient(ctx, &e.api.cnf.TG, session.Session, e.api.newMiddlewares(ctx, 5)...)
-		if err != nil {
-			logger.Error("stream.auth_client_failed", zap.Error(err))
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+		if session.Session == "" {
+			http.Error(w, "Telegram session unavailable; sign in again", http.StatusForbidden)
 			return
 		}
-
+		client, err = tgc.AuthClient(ctx, &e.api.cnf.TG, session.Session, middlewares...)
 	} else {
 		token, _, err = e.api.botSelector.Next(ctx, tgc.BotOpStream, session.UserId, tokens)
-		if err != nil {
-			logger.Error("stream.bot_selection_failed", zap.Error(err))
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		client, err = tgc.BotClient(ctx, e.api.db, e.api.cache, &e.api.cnf.TG, token, e.api.newMiddlewares(ctx, 5)...)
-		if err != nil {
-			logger.Error("stream.bot_client_failed", zap.Error(err))
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
+		if err == nil {
+			client, err = tgc.BotClient(ctx, e.api.db, e.api.cache, &e.api.cnf.TG, token, middlewares...)
 		}
 	}
-
+	if err != nil {
+		setupFailed = streamStatus(err) == 503
+		logger.Error("stream.client_failed", zap.Error(err))
+		writeStreamError(w, err)
+		return
+	}
 	botID := strconv.FormatInt(session.UserId, 10)
 	if token != "" {
-		parts := strings.Split(token, ":")
-		if len(parts) > 0 {
-			botID = parts[0]
-		}
+		botID = strings.Split(token, ":")[0]
 	}
-
-	if r.Method != http.MethodHead {
-		handleStream := func() error {
+	committed, err := writeStream(ctx, w, status, contentLength,
+		func(ctx context.Context, f func(context.Context) error) error {
+			return tgc.RunWithAuth(ctx, client, token, f)
+		},
+		func(ctx context.Context) (io.ReadCloser, error) {
 			parts, err := getParts(ctx, client, e.api.cache, file)
 			if err != nil {
-				logger.Error("stream.parts_fetch_failed", zap.Error(err))
-				http.Error(w, err.Error(), http.StatusInternalServerError)
-				return nil
+				return nil, err
 			}
-
-			lr, err = reader.NewReader(ctx,
-				client.API(),
-				e.api.cache,
-				file,
-				parts,
-				start,
-				end,
-				&e.api.cnf.TG,
-				botID,
-			)
-
-			if err != nil {
-				logger.Error("stream.reader_create_failed", zap.Error(err))
-				http.Error(w, err.Error(), http.StatusInternalServerError)
-				return nil
+			return reader.NewReader(ctx, client.API(), e.api.cache, file, parts, start, end, &e.api.cnf.TG, botID)
+		}, prepare, logger)
+	if err != nil {
+		logger.Error("stream.failed", zap.Error(err), zap.Bool("committed", committed))
+		setupFailed = streamStatus(err) == 503 && !errors.Is(err, context.Canceled)
+		if committed {
+			if setupFailed {
+				streamSetupAdmission.Cooldown(fileKey)
 			}
-			if lr == nil {
-				logger.Error("stream.reader_nil")
-				http.Error(w, "failed to initialise reader", http.StatusInternalServerError)
-				return nil
-			}
-
-			_, err = io.CopyN(w, lr, contentLength)
-			if err != nil {
-				lr.Close()
-			}
-			return nil
+			// Abort on the HTTP goroutine, not inside gotd. net/http resets HTTP/2
+			// streams or closes HTTP/1 connections without appending plaintext media.
+			panic(http.ErrAbortHandler)
 		}
-
-		tgc.RunWithAuth(ctx, client, token, func(ctx context.Context) error {
-			return handleStream()
-		})
-
+		writeStreamError(w, err)
 	}
 }
 

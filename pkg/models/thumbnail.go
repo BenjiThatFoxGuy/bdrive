@@ -3,7 +3,7 @@ package models
 import "time"
 
 type Thumbnail struct {
-	ID        string    `gorm:"type:uuid;primaryKey;default:teldrive.uuid7()"`
+	ID        string    `gorm:"type:uuid;primaryKey;default:public.uuid7()"`
 	FileId    string    `gorm:"type:uuid;not null;uniqueIndex"`
 	UserId    int64     `gorm:"type:bigint;not null"`
 	ChannelId int64     `gorm:"type:bigint;not null"`
