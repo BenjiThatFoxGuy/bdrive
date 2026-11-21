@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/tgdrive/teldrive/internal/admission"
@@ -171,12 +173,40 @@ func (s *securityHandler) HandleBearerAuth(ctx context.Context, operationName ap
 	return s.handleAuth(ctx, t.Token)
 }
 
+// WithClaims returns a context carrying verified JWT claims.
+func WithClaims(ctx context.Context, claims *types.JWTClaims) context.Context {
+	return context.WithValue(ctx, authKey, claims)
+}
+
+// FromRequest verifies a request's credentials (access_token cookie, or a
+// Bearer Authorization header) and returns a context carrying the claims.
+//
+// Routes registered directly on the chi mux sit outside the generated OAS
+// server, so its security handler never runs for them; this is what lets them
+// resolve the caller the same way.
+func FromRequest(ctx context.Context, db *gorm.DB, cacher cache.Cacher, secret string, r *http.Request) (context.Context, error) {
+	token := ""
+	if c, err := r.Cookie("access_token"); err == nil {
+		token = c.Value
+	} else if header := r.Header.Get("Authorization"); strings.HasPrefix(header, "Bearer ") {
+		token = strings.TrimSpace(strings.TrimPrefix(header, "Bearer "))
+	}
+	if token == "" {
+		return nil, errors.New("missing token")
+	}
+	claims, err := VerifyUser(ctx, db, cacher, secret, token)
+	if err != nil {
+		return nil, err
+	}
+	return WithClaims(ctx, claims), nil
+}
+
 func (s *securityHandler) handleAuth(ctx context.Context, token string) (context.Context, error) {
 	claims, err := VerifyUser(ctx, s.db, s.cache, s.cfg.Secret, token)
 	if err != nil {
 		return nil, &ogenerrors.SecurityError{Err: err}
 	}
-	return context.WithValue(ctx, authKey, claims), nil
+	return WithClaims(ctx, claims), nil
 }
 
 func NewSecurityHandler(db *gorm.DB, cache cache.Cacher, cfg *config.JWTConfig) api.SecurityHandler {

@@ -422,6 +422,9 @@ func knownBotUsername(ctx context.Context, peerStorage *tgstorage.PeerStorage, b
 // bad (revoked, reset, deactivated) rather than the request being throttled or
 // the network being unavailable.
 func isDefiniteBotAuthFailure(err error) bool {
+	if err == nil {
+		return false
+	}
 	if tgerr.Is(err,
 		"AUTH_KEY_INVALID",
 		"AUTH_KEY_UNREGISTERED",
@@ -471,7 +474,12 @@ func (a *apiService) removeBots(ctx context.Context, userId int64, peerStorage *
 
 // BotTokenCleanupHandler is the HTTP handler for bot token cleanup.
 func (a *apiService) BotTokenCleanupHandler(w http.ResponseWriter, r *http.Request) {
-	result, err := a.BotTokenCleanup(r.Context())
+	ctx, err := auth.FromRequest(r.Context(), a.db, a.cache, a.cnf.JWT.Secret, r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusUnauthorized)
+		return
+	}
+	result, err := a.BotTokenCleanup(ctx)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

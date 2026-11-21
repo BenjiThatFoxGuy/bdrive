@@ -15,11 +15,13 @@ import (
 	"github.com/tgdrive/teldrive/internal/api"
 	"github.com/tgdrive/teldrive/internal/auth"
 	"github.com/tgdrive/teldrive/internal/cache"
+	"github.com/tgdrive/teldrive/internal/logging"
 	"github.com/tgdrive/teldrive/internal/tgc"
 	"github.com/tgdrive/teldrive/internal/tgstorage"
 	"github.com/tgdrive/teldrive/pkg/models"
 
 	"github.com/gotd/contrib/storage"
+	"go.uber.org/zap"
 	"gorm.io/gorm/clause"
 )
 
@@ -94,7 +96,10 @@ func (a *apiService) UsersCreateChannel(ctx context.Context, req *api.Channel) e
 
 func (a *apiService) UsersDeleteChannel(ctx context.Context, params api.UsersDeleteChannelParams) error {
 	userId := auth.GetUser(ctx)
-	client, _ := tgc.AuthClient(ctx, &a.cnf.TG, auth.GetJWTUser(ctx).TgSession, a.newMiddlewares(ctx, 5)...)
+	client, cerr := tgc.AuthClient(ctx, &a.cnf.TG, auth.GetJWTUser(ctx).TgSession, a.newMiddlewares(ctx, 5)...)
+	if cerr != nil {
+		return &apiError{err: cerr}
+	}
 	channelId, _ := strconv.ParseInt(params.ID, 10, 64)
 	peerStorage := tgstorage.NewPeerStorage(a.db, cache.KeyPeer(userId))
 	var (
@@ -146,12 +151,18 @@ func (a *apiService) UsersSyncChannels(ctx context.Context) error {
 func (a *apiService) UsersListSessions(ctx context.Context) ([]api.UserSession, error) {
 	userId := auth.GetUser(ctx)
 	return cache.Fetch(ctx, a.cache, cache.KeyUserSessions(userId), 0, func() ([]api.UserSession, error) {
-		userSession := auth.GetJWTUser(ctx).TgSession
-		client, _ := tgc.AuthClient(ctx, &a.cnf.TG, userSession, a.newMiddlewares(ctx, 5)...)
-		var (
-			auth *tg.AccountAuthorizations
-			err  error
-		)
+		claims := auth.GetJWTUser(ctx)
+		if claims == nil {
+			return nil, errors.New("unauthenticated")
+		}
+		userSession := claims.TgSession
+		client, err := tgc.AuthClient(ctx, &a.cnf.TG, userSession, a.newMiddlewares(ctx, 5)...)
+		if err != nil {
+			// Returning the error instead of dereferencing a nil client keeps a
+			// failed client build from panicking the request goroutine.
+			return nil, err
+		}
+		var auth *tg.AccountAuthorizations
 		err = client.Run(ctx, func(ctx context.Context) error {
 			auth, err = client.API().AccountGetAuthorizations(ctx)
 			if err != nil {
@@ -262,15 +273,20 @@ func (a *apiService) UsersRemoveSession(ctx context.Context, params api.UsersRem
 		return &apiError{err: err}
 	}
 
-	client, _ := tgc.AuthClient(ctx, &a.cnf.TG, session.Session, a.newMiddlewares(ctx, 5)...)
-
-	client.Run(ctx, func(ctx context.Context) error {
-		_, err := client.API().AuthLogOut(ctx)
-		if err != nil {
-			return err
-		}
-		return nil
-	})
+	client, cerr := tgc.AuthClient(ctx, &a.cnf.TG, session.Session, a.newMiddlewares(ctx, 5)...)
+	if cerr != nil {
+		// The local session is still dropped below; only the remote logout is
+		// skipped when the client cannot be built.
+		logging.Component("API").Error("session.logout_client_failed", zap.Error(cerr))
+	} else {
+		client.Run(ctx, func(ctx context.Context) error {
+			_, err := client.API().AuthLogOut(ctx)
+			if err != nil {
+				return err
+			}
+			return nil
+		})
+	}
 
 	a.db.Where("user_id = ?", userId).Where("hash = ?", session.Hash).Delete(&models.Session{})
 	a.cache.Delete(ctx, cache.KeyUserSessions(userId), cache.KeySessionUser(userId))

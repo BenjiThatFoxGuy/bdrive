@@ -132,7 +132,11 @@ func (c *CronService) cleanFiles(ctx context.Context) {
 
 		}
 
-		client, _ := tgc.AuthClient(ctx, &c.cnf.TG, row.Session, middlewares...)
+		client, cerr := tgc.AuthClient(ctx, &c.cnf.TG, row.Session, middlewares...)
+		if cerr != nil {
+			c.logger.Error("cron.client_failed", zap.Error(cerr), zap.Int64("channel_id", row.ChannelId))
+			return
+		}
 
 		// Include thumbnail Telegram message IDs for deletion.
 		var thumbMsgIds []int
@@ -187,7 +191,11 @@ func (c *CronService) cleanUploads(ctx context.Context) {
 	for _, result := range results {
 
 		if result.Session != "" && len(result.Parts) > 0 {
-			client, _ := tgc.AuthClient(ctx, &c.cnf.TG, result.Session, middlewares...)
+			client, cerr := tgc.AuthClient(ctx, &c.cnf.TG, result.Session, middlewares...)
+			if cerr != nil {
+				c.logger.Error("cron.client_failed", zap.Error(cerr), zap.Int64("channel_id", result.ChannelId))
+				return
+			}
 
 			err := tgc.DeleteMessages(ctx, client, result.ChannelId, result.Parts)
 			if err != nil {
