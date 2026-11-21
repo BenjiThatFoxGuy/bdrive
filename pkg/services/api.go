@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -9,7 +10,10 @@ import (
 	"time"
 
 	"github.com/go-faster/errors"
+	"github.com/gotd/contrib/storage"
 	"github.com/gotd/td/telegram"
+	"github.com/gotd/td/telegram/query/dialogs"
+	"github.com/gotd/td/tgerr"
 	"github.com/ogen-go/ogen/ogenerrors"
 	"go.uber.org/zap"
 
@@ -21,6 +25,7 @@ import (
 	"github.com/tgdrive/teldrive/internal/events"
 	"github.com/tgdrive/teldrive/internal/logging"
 	"github.com/tgdrive/teldrive/internal/tgc"
+	"github.com/tgdrive/teldrive/internal/tgstorage"
 	"github.com/tgdrive/teldrive/internal/utils"
 	"github.com/tgdrive/teldrive/internal/version"
 	"github.com/tgdrive/teldrive/pkg/models"
@@ -339,3 +344,160 @@ var (
 	_ api.Handler = (*apiService)(nil)
 	_ error       = apiError{}
 )
+
+// BotTokenCleanup tests every bot token configured for the user and removes the
+// ones that are definitively invalid. Tokens that are merely rate-limited or
+// temporarily unreachable are kept and reported, so a transient failure never
+// deletes a working bot.
+func (a *apiService) BotTokenCleanup(ctx context.Context) (*BotTokenCleanupResult, error) {
+	userId := auth.GetUser(ctx)
+	if userId == 0 {
+		return nil, errors.New("unauthenticated")
+	}
+
+	var bots []models.Bot
+	if err := a.db.Where("user_id = ?", userId).Find(&bots).Error; err != nil {
+		return nil, errors.Wrap(err, "list bots")
+	}
+
+	peerStorage := tgstorage.NewPeerStorage(a.db, cache.KeyPeer(userId))
+
+	result := &BotTokenCleanupResult{
+		Valid:   []BotTokenInfo{},
+		Invalid: []BotTokenInfo{},
+		Kept:    []BotTokenInfo{},
+	}
+
+	for _, bot := range bots {
+		userName := knownBotUsername(ctx, peerStorage, bot.BotId)
+
+		info, err := tgc.GetBotInfo(ctx, a.db, a.cache, &a.cnf.TG, bot.Token)
+		switch {
+		case err == nil:
+			if userName == "" {
+				userName = info.UserName
+			}
+			result.Valid = append(result.Valid, BotTokenInfo{
+				BotId:    bot.BotId,
+				UserName: userName,
+			})
+		case isDefiniteBotAuthFailure(err):
+			result.Invalid = append(result.Invalid, BotTokenInfo{
+				BotId:    bot.BotId,
+				UserName: userName,
+				Error:    err.Error(),
+			})
+		default:
+			// Rate-limited, network failure, timeout, ... keep the token.
+			result.Kept = append(result.Kept, BotTokenInfo{
+				BotId:    bot.BotId,
+				UserName: userName,
+				Error:    err.Error(),
+			})
+		}
+	}
+
+	result.TotalScanned = len(bots)
+
+	if len(result.Invalid) > 0 {
+		if err := a.removeBots(ctx, userId, peerStorage, result.Invalid); err != nil {
+			return nil, err
+		}
+	}
+
+	return result, nil
+}
+
+// knownBotUsername returns the last username cached for a bot peer, if any.
+func knownBotUsername(ctx context.Context, peerStorage *tgstorage.PeerStorage, botId int64) string {
+	peer, err := peerStorage.Find(ctx, storage.PeerKey{Kind: dialogs.User, ID: botId})
+	if err != nil || peer.User == nil {
+		return ""
+	}
+	username, _ := peer.User.GetUsername()
+	return username
+}
+
+// isDefiniteBotAuthFailure reports whether the error proves the token itself is
+// bad (revoked, reset, deactivated) rather than the request being throttled or
+// the network being unavailable.
+func isDefiniteBotAuthFailure(err error) bool {
+	if tgerr.Is(err,
+		"AUTH_KEY_INVALID",
+		"AUTH_KEY_UNREGISTERED",
+		"AUTH_TOKEN_INVALID",
+		"AUTH_TOKEN_INVALIDX",
+		"AUTH_TOKEN_EXPIRED",
+		"BOT_INVALID",
+	) {
+		return true
+	}
+	msg := strings.ToLower(err.Error())
+	for _, marker := range []string{
+		"bot was deactivated",
+		"bot was revoked",
+		"bot token is invalid",
+		"auth_key_invalid",
+		"auth_token_invalid",
+	} {
+		if strings.Contains(msg, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+// removeBots deletes the given bots from the database and drops their cached
+// peers so nothing keeps pointing at a token that no longer works.
+func (a *apiService) removeBots(ctx context.Context, userId int64, peerStorage *tgstorage.PeerStorage, bots []BotTokenInfo) error {
+	ids := make([]int64, 0, len(bots))
+	for _, bot := range bots {
+		ids = append(ids, bot.BotId)
+	}
+
+	if err := a.db.Where("user_id = ? AND bot_id IN ?", userId, ids).Delete(&models.Bot{}).Error; err != nil {
+		return errors.Wrap(err, "delete bots")
+	}
+
+	for _, bot := range bots {
+		if err := peerStorage.Delete(ctx, storage.PeerKey{Kind: dialogs.User, ID: bot.BotId}); err != nil {
+			return errors.Wrap(err, "delete bot peer")
+		}
+	}
+
+	a.cache.Delete(ctx, cache.KeyUserBots(userId))
+	return nil
+}
+
+// BotTokenCleanupHandler is the HTTP handler for bot token cleanup.
+func (a *apiService) BotTokenCleanupHandler(w http.ResponseWriter, r *http.Request) {
+	result, err := a.BotTokenCleanup(r.Context())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	encoder := json.NewEncoder(w)
+	encoder.SetEscapeHTML(false)
+	if err := encoder.Encode(result); err != nil {
+		logger := logging.Component("API")
+		logger.Error("response.write", zap.Error(err))
+	}
+}
+
+// BotTokenInfo describes one bot found during a cleanup run. The token itself is
+// never included.
+type BotTokenInfo struct {
+	BotId    int64  `json:"bot_id"`
+	UserName string `json:"user_name,omitempty"`
+	Error    string `json:"error,omitempty"`
+}
+
+// BotTokenCleanupResult is the outcome of a bot token cleanup run.
+type BotTokenCleanupResult struct {
+	TotalScanned int            `json:"total_scanned"`
+	Valid        []BotTokenInfo `json:"valid"`
+	Invalid      []BotTokenInfo `json:"invalid"`
+	Kept         []BotTokenInfo `json:"kept"`
+}

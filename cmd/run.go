@@ -296,6 +296,9 @@ func setupServer(cfg *config.ServerCmdConfig, db *gorm.DB, cache cache.Cacher, l
 	}))
 	mux.Use(appcontext.Middleware)
 	mux.Mount("/api/settings", apiSrv.SettingsRouter())
+	mux.Post("/api/bots/cleanup", func(w http.ResponseWriter, r *http.Request) {
+		apiSrv.BotTokenCleanupHandler(w, r)
+	})
 	mux.Mount("/api/resolve", apiSrv.ResolveRouter())
 	mux.Mount("/api/", http.StripPrefix("/api", extendedSrv))
 
