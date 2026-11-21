@@ -35,7 +35,7 @@ func NewGenerator(maxInputSize int64, timeout time.Duration, maxConcurrent int) 
 // ffmpeg to extract a single JPEG frame (360 px wide, quality ~80). The caller
 // must decrypt encrypted input before passing it here.
 func (g *Generator) Generate(ctx context.Context, input io.Reader, inputSize int64) ([]byte, error) {
-	if inputSize > g.maxInputSize {
+	if g.maxInputSize > 0 && inputSize > g.maxInputSize {
 		return nil, ErrInputTooLarge
 	}
 
@@ -74,6 +74,39 @@ func (g *Generator) Generate(ctx context.Context, input io.Reader, inputSize int
 		os.Remove(outputPath)
 		if err2 := runFFmpeg(ffCtx, inputPath, outputPath, "0"); err2 != nil {
 			return nil, fmt.Errorf("ffmpeg: %w", err2)
+		}
+	}
+
+	return os.ReadFile(outputPath)
+}
+
+// GenerateFromURL runs ffmpeg directly against an HTTP(S) URL. ffmpeg handles
+// its own seeking, so we never download the whole file into memory or disk.
+// This only works for unencrypted files whose stream endpoint supports Range.
+func (g *Generator) GenerateFromURL(ctx context.Context, url string) ([]byte, error) {
+	// Acquire concurrency slot.
+	select {
+	case g.sem <- struct{}{}:
+		defer func() { <-g.sem }()
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+
+	tmpDir, err := os.MkdirTemp("", "teldrive-thumb-*")
+	if err != nil {
+		return nil, fmt.Errorf("create temp dir: %w", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	outputPath := filepath.Join(tmpDir, "output.jpg")
+
+	ffCtx, cancel := context.WithTimeout(ctx, g.timeout)
+	defer cancel()
+
+	if err := runFFmpeg(ffCtx, url, outputPath, "1"); err != nil {
+		os.Remove(outputPath)
+		if err2 := runFFmpeg(ffCtx, url, outputPath, "0"); err2 != nil {
+			return nil, fmt.Errorf("ffmpeg url: %w", err2)
 		}
 	}
 
