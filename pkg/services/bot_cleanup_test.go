@@ -7,6 +7,32 @@ import (
 	"github.com/gotd/td/tgerr"
 )
 
+func TestBotIDFromToken(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		stored int64
+		token  string
+		want   int64
+	}{
+		{"stored id wins", 42, "999:secret", 42},
+		{"derived from the token prefix", 0, "999:secret", 999},
+		{"no colon keeps the stored value", 0, "not-a-token", 0},
+		{"non numeric prefix keeps the stored value", 0, "abc:secret", 0},
+		{"empty token keeps the stored value", 0, "", 0},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := botIDFromToken(tt.stored, tt.token); got != tt.want {
+				t.Fatalf("botIDFromToken(%d, %q) = %d, want %d", tt.stored, tt.token, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestIsDefiniteBotAuthFailure(t *testing.T) {
 	t.Parallel()
 
@@ -33,6 +59,16 @@ func TestIsDefiniteBotAuthFailure(t *testing.T) {
 		{
 			name: "bot deactivated message",
 			err:  errors.New("BOT_INVALID: bot was deactivated by the user"),
+			want: true,
+		},
+		{
+			name: "access token expired is a removal reason",
+			err:  tgerr.New(400, "ACCESS_TOKEN_EXPIRED"),
+			want: true,
+		},
+		{
+			name: "access token invalid is a removal reason",
+			err:  tgerr.New(400, "ACCESS_TOKEN_INVALID"),
 			want: true,
 		},
 		{

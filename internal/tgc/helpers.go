@@ -204,7 +204,7 @@ func GetBotInfo(ctx context.Context, db *gorm.DB, cache cache.Cacher, config *co
 	if err != nil {
 		return nil, err
 	}
-	return &types.BotInfo{Id: user.ID, UserName: user.Username, Token: token}, nil
+	return &types.BotInfo{Id: user.ID, UserName: user.Username, AccessHash: user.AccessHash, Token: token}, nil
 }
 
 func GetLocation(ctx context.Context, client *tg.Client, channelId int64, partId int64) (location *tg.InputDocumentFileLocation, err error) {
