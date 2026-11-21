@@ -35,7 +35,7 @@ func TestFilesStreamDescriptorAndHeadResponsesBeforeTelegram(t *testing.T) {
 			if err := c.Set(ctx, cache.Key("files", "file"), tt.file, 0); err != nil {
 				t.Fatal(err)
 			}
-			e := NewExtendedService(NewApiService(nil, &config.ServerCmdConfig{}, c, nil, nil))
+			e := NewExtendedService(NewApiService(nil, &config.ServerCmdConfig{}, c, nil, nil, nil))
 			r := httptest.NewRequest(tt.method, "/?hash=stream-test", nil)
 			w := httptest.NewRecorder()
 			e.FilesStream(w, r, "file", 0)

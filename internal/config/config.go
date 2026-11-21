@@ -102,6 +102,21 @@ type FilesConfig struct {
 	ZipMaxFiles            int   `default:"10000" description:"Maximum files in a single zip download (0 disables the limit)"`
 	ZipMaxSize             int64 `default:"0" description:"Maximum total uncompressed bytes in a single zip download (0 disables the limit)"`
 	ZipMaxConcurrent       int   `default:"4" description:"Maximum zip downloads streaming concurrently (0 disables the limit)"`
+	Cache                  FileCacheConfig
+}
+
+// FileCacheConfig controls the local whole-file cache. A cached file is served
+// from memory or disk instead of being fetched from Telegram again, no matter
+// which client asked (web UI, API, rclone, thumbnails).
+type FileCacheConfig struct {
+	Enabled          bool   `default:"false" description:"Cache whole files locally so repeat requests skip Telegram entirely"`
+	MemoryMaxMB      int64  `default:"2048" description:"Memory tier budget in MB"`
+	MemoryMaxFileMB  int64  `default:"256" description:"Largest file the memory tier holds, in MB"`
+	MemoryTTLMinutes int    `default:"60" description:"Minutes a memory entry lives without being read"`
+	DiskEnabled      bool   `default:"true" description:"Cache files larger than the memory cap on local disk"`
+	DiskPath         string `default:"/var/cache/teldrive" description:"Directory for the disk tier; mount a host path here to keep it off the container layer"`
+	DiskMaxMB        int64  `default:"20480" description:"Disk tier budget in MB"`
+	DiskTTLMinutes   int    `default:"1440" description:"Minutes a disk entry lives without being read"`
 }
 
 type ShortlinkConfig struct {

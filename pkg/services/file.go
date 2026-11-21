@@ -25,6 +25,7 @@ import (
 	"github.com/tgdrive/teldrive/internal/category"
 	"github.com/tgdrive/teldrive/internal/database"
 	"github.com/tgdrive/teldrive/internal/events"
+	"github.com/tgdrive/teldrive/internal/filecache"
 	"github.com/tgdrive/teldrive/internal/hash"
 	"github.com/tgdrive/teldrive/internal/http_range"
 	"github.com/tgdrive/teldrive/internal/logging"
@@ -1739,6 +1740,87 @@ func (a *apiService) FilesUpdate(ctx context.Context, req *api.FileUpdate, param
 	return mapper.ToFileOut(file), nil
 }
 
+// cacheEntryReader serves part of a cached entry and closes it afterwards.
+type cacheEntryReader struct {
+	io.Reader
+	entry *filecache.Entry
+}
+
+func (r *cacheEntryReader) Close() error { return r.entry.Close() }
+
+// openCachedFile serves [start, start+length) straight out of the local file
+// cache, so a file that is already cached never goes back to Telegram.
+func (e *extendedService) openCachedFile(fileID string, start, length int64) (io.ReadCloser, bool) {
+	if e.api.fileCache == nil || !e.api.fileCache.Enabled() || fileID == "" || length <= 0 {
+		return nil, false
+	}
+	entry, ok := e.api.fileCache.Open(fileID)
+	if !ok {
+		return nil, false
+	}
+	if _, err := entry.Seek(start, io.SeekStart); err != nil {
+		entry.Close()
+		return nil, false
+	}
+	return &cacheEntryReader{Reader: io.LimitReader(entry, length), entry: entry}, true
+}
+
+// cacheTeeCloser mirrors everything read from src into the file cache. The entry
+// is only published if the whole file arrives, so a client that disconnects early
+// leaves nothing behind.
+type cacheTeeCloser struct {
+	io.Reader
+	src   io.ReadCloser
+	cache io.WriteCloser
+}
+
+func (c *cacheTeeCloser) Close() error {
+	srcErr := c.src.Close()
+	cacheErr := c.cache.Close()
+	if srcErr != nil {
+		return srcErr
+	}
+	return cacheErr
+}
+
+// edgeCacheable reports whether the request carries its credentials in the URL.
+//
+// Cloudflare's default cache key is the full URL including the query string, and
+// it ignores Cookie and Authorization. So a response authenticated by cookie must
+// never be marked cacheable: it would be stored under a key that says nothing
+// about who asked, and then served to anyone who guesses the path. A URL that
+// carries its own token (a share link's hash, an ephemeral download token) is
+// safe, because only a client holding that token can name that cache entry.
+func edgeCacheable(r *http.Request) bool {
+	return r.URL.Query().Get("hash") != "" || r.URL.Query().Get("token") != ""
+}
+
+// setEdgeCache marks a response as edge-cacheable for seconds, or as private and
+// uncacheable when seconds is zero. CDN-Cache-Control governs Cloudflare while
+// Cache-Control still tells the browser what to do.
+func setEdgeCache(w http.ResponseWriter, seconds int) {
+	if seconds > 0 {
+		value := fmt.Sprintf("public, max-age=%d, immutable", seconds)
+		w.Header().Set("Cache-Control", value)
+		w.Header().Set("CDN-Cache-Control", value)
+		return
+	}
+	w.Header().Set("Cache-Control", "private, no-store")
+	w.Header().Set("CDN-Cache-Control", "no-store")
+}
+
+// edgeCacheSeconds is how long a cacheable file response may be kept. Downloads
+// and thumbnails are addressed by file ID and never change in place.
+const edgeCacheSeconds = 86400
+
+// streamEdgeCacheSeconds allows edge caching only for URL-tokenised requests.
+func streamEdgeCacheSeconds(r *http.Request) int {
+	if edgeCacheable(r) {
+		return edgeCacheSeconds
+	}
+	return 0
+}
+
 func (e *extendedService) FilesStream(w http.ResponseWriter, r *http.Request, fileId string, userId int64) {
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
@@ -1888,6 +1970,9 @@ func (e *extendedService) FilesStream(w http.ResponseWriter, r *http.Request, fi
 			disposition = "attachment"
 		}
 		w.Header().Set("Content-Disposition", mime.FormatMediaType(disposition, map[string]string{"filename": file.Name}))
+		// Only a URL carrying its own token may be edge-cached. A cookie session
+		// must never be stored under a key that ignores the cookie.
+		setEdgeCache(w, streamEdgeCacheSeconds(r))
 	}
 	if r.Method == http.MethodHead {
 		prepare()
@@ -1936,11 +2021,29 @@ func (e *extendedService) FilesStream(w http.ResponseWriter, r *http.Request, fi
 			return tgc.RunWithAuth(ctx, client, token, f)
 		},
 		func(ctx context.Context) (io.ReadCloser, error) {
+			// Already cached locally: serve the range without touching Telegram.
+			if cached, ok := e.openCachedFile(fileId, start, contentLength); ok {
+				return cached, nil
+			}
 			parts, err := getParts(ctx, client, e.api.cache, file)
 			if err != nil {
 				return nil, err
 			}
-			return reader.NewReader(ctx, client.API(), e.api.cache, file, parts, start, end, &e.api.cnf.TG, botID)
+			lr, err := reader.NewReader(ctx, client.API(), e.api.cache, file, parts, start, end, &e.api.cnf.TG, botID)
+			if err != nil {
+				return nil, err
+			}
+			// Only a whole-file read can populate the cache: a partial read would
+			// store a truncated entry.
+			if start != 0 || end != *file.Size-1 || e.api.fileCache == nil || !e.api.fileCache.Enabled() {
+				return lr, nil
+			}
+			cacheWriter, err := e.api.fileCache.Store(fileId, *file.Size)
+			if err != nil {
+				// ErrSkipped (too large) and friends: just stream it.
+				return lr, nil
+			}
+			return &cacheTeeCloser{Reader: io.TeeReader(lr, cacheWriter), src: lr, cache: cacheWriter}, nil
 		}, prepare, logger)
 	if err != nil {
 		logger.Error("stream.failed", zap.Error(err), zap.Bool("committed", committed))

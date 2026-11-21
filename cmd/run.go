@@ -26,6 +26,7 @@ import (
 	"github.com/tgdrive/teldrive/internal/config"
 	"github.com/tgdrive/teldrive/internal/database"
 	"github.com/tgdrive/teldrive/internal/events"
+	"github.com/tgdrive/teldrive/internal/filecache"
 	"github.com/tgdrive/teldrive/internal/logging"
 	"github.com/tgdrive/teldrive/internal/middleware"
 	"github.com/tgdrive/teldrive/internal/tgc"
@@ -182,8 +183,15 @@ func runApplication(ctx context.Context, conf *config.ServerCmdConfig) {
 		os.Exit(1)
 	}
 
+	// Local whole-file cache: repeat requests for the same file are served from
+	// memory or disk instead of being fetched from Telegram again.
+	fileCache := buildFileCache(conf, lg)
+	if fileCache != nil && fileCache.Enabled() {
+		fileCache.Start(bgCtx)
+	}
+
 	// Setup and start HTTP server immediately
-	srv, shortlinkResolver := setupServer(conf, db, cacher, lg, botSelector, eventBroadcaster)
+	srv, shortlinkResolver := setupServer(conf, db, cacher, lg, botSelector, eventBroadcaster, fileCache)
 
 	var shortlinkSrv *http.Server
 	if conf.Shortlinks.Enabled {
@@ -263,9 +271,41 @@ func runApplication(ctx context.Context, conf *config.ServerCmdConfig) {
 	lg.Info("server.stopped")
 }
 
-func setupServer(cfg *config.ServerCmdConfig, db *gorm.DB, cache cache.Cacher, lg *zap.Logger, botSelector tgc.BotSelector, eventBroadcaster events.EventBroadcaster) (*http.Server, services.ShortlinkResolver) {
+// buildFileCache turns the config block into a tiered cache. A failure here is
+// not fatal: the file cache is an optimisation, so the server runs without it.
+func buildFileCache(cnf *config.ServerCmdConfig, lg *zap.Logger) *filecache.Cache {
+	cfg := cnf.Files.Cache
+	fc := filecache.Config{
+		MemoryEnabled:     cfg.Enabled,
+		MemoryMaxBytes:    cfg.MemoryMaxMB * 1024 * 1024,
+		MemoryMaxFileByte: cfg.MemoryMaxFileMB * 1024 * 1024,
+		MemoryTTL:         time.Duration(cfg.MemoryTTLMinutes) * time.Minute,
+		DiskEnabled:       cfg.Enabled && cfg.DiskEnabled,
+		DiskPath:          cfg.DiskPath,
+		DiskMaxBytes:      cfg.DiskMaxMB * 1024 * 1024,
+		DiskTTL:           time.Duration(cfg.DiskTTLMinutes) * time.Minute,
+	}
+	c, err := filecache.New(fc, lg)
+	if err != nil {
+		lg.Error("filecache.init_failed", zap.Error(err))
+		return nil
+	}
+	stats := c.Stats()
+	lg.Info("filecache.started",
+		zap.Bool("enabled", c.Enabled()),
+		zap.Bool("memory", fc.MemoryEnabled),
+		zap.Int64("memory_budget_mb", cfg.MemoryMaxMB),
+		zap.Bool("disk", fc.DiskEnabled),
+		zap.Int64("disk_budget_mb", cfg.DiskMaxMB),
+		zap.String("disk_path", cfg.DiskPath),
+		zap.Int("disk_entries_restored", stats.Disk.Entries),
+	)
+	return c
+}
 
-	apiSrv := services.NewApiService(db, cfg, cache, botSelector, eventBroadcaster)
+func setupServer(cfg *config.ServerCmdConfig, db *gorm.DB, cache cache.Cacher, lg *zap.Logger, botSelector tgc.BotSelector, eventBroadcaster events.EventBroadcaster, fileCache *filecache.Cache) (*http.Server, services.ShortlinkResolver) {
+
+	apiSrv := services.NewApiService(db, cfg, cache, botSelector, eventBroadcaster, fileCache)
 
 	srv, err := api.NewServer(apiSrv, auth.NewSecurityHandler(db, cache, &cfg.JWT), api.WithErrorHandler(auth.HTTPErrorHandler))
 
@@ -295,12 +335,22 @@ func setupServer(cfg *config.ServerCmdConfig, db *gorm.DB, cache cache.Cacher, l
 		HTTPConfig: &cfg.Log.HTTP,
 	}))
 	mux.Use(appcontext.Middleware)
-	mux.Mount("/api/settings", apiSrv.SettingsRouter())
+	// API responses are user-specific unless a handler explicitly opts into edge
+	// caching (only URL-tokenised file responses do). Setting it here makes every
+	// endpoint private by default instead of accidentally cacheable.
+	apiNoStore := func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Cache-Control", "private, no-store")
+			w.Header().Set("CDN-Cache-Control", "no-store")
+			next.ServeHTTP(w, r)
+		})
+	}
+	mux.Mount("/api/settings", apiNoStore(apiSrv.SettingsRouter()))
 	mux.Post("/api/bots/cleanup", func(w http.ResponseWriter, r *http.Request) {
 		apiSrv.BotTokenCleanupHandler(w, r)
 	})
-	mux.Mount("/api/resolve", apiSrv.ResolveRouter())
-	mux.Mount("/api/", http.StripPrefix("/api", extendedSrv))
+	mux.Mount("/api/resolve", apiNoStore(apiSrv.ResolveRouter()))
+	mux.Mount("/api/", http.StripPrefix("/api", apiNoStore(extendedSrv)))
 
 	spaHandler := middleware.SPAHandler(ui.StaticFS)
 

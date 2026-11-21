@@ -23,6 +23,7 @@ import (
 	"github.com/tgdrive/teldrive/internal/cache"
 	"github.com/tgdrive/teldrive/internal/config"
 	"github.com/tgdrive/teldrive/internal/events"
+	"github.com/tgdrive/teldrive/internal/filecache"
 	"github.com/tgdrive/teldrive/internal/logging"
 	"github.com/tgdrive/teldrive/internal/tgc"
 	"github.com/tgdrive/teldrive/internal/tgstorage"
@@ -43,6 +44,9 @@ type apiService struct {
 	// zipSlots caps how many archives stream at once. nil when the limit is
 	// disabled.
 	zipSlots chan struct{}
+	// fileCache holds decrypted file contents so a repeat request for the same
+	// file does not go back to Telegram. Nil when disabled.
+	fileCache *filecache.Cache
 }
 
 func (a *apiService) newMiddlewares(ctx context.Context, retries int) []telegram.Middleware {
@@ -199,7 +203,8 @@ func NewApiService(db *gorm.DB,
 	cnf *config.ServerCmdConfig,
 	cache cache.Cacher,
 	botSelector tgc.BotSelector,
-	events events.EventBroadcaster) *apiService {
+	events events.EventBroadcaster,
+	fileCache *filecache.Cache) *apiService {
 
 	var zipSlots chan struct{}
 	if limit := cnf.Files.ZipMaxConcurrent; limit > 0 {
@@ -215,6 +220,7 @@ func NewApiService(db *gorm.DB,
 		channelManager: tgc.NewChannelManager(db, cache, &cnf.TG),
 		dedup:          newDedupManager(),
 		zipSlots:       zipSlots,
+		fileCache:      fileCache,
 	}
 }
 
