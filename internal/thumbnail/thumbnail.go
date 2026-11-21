@@ -32,7 +32,7 @@ func NewGenerator(maxInputSize int64, timeout time.Duration, maxConcurrent int) 
 }
 
 // Generate reads the full video from input, writes it to a temp file, and runs
-// ffmpeg to extract a single JPEG frame (360 px wide, quality ~80). The caller
+// ffmpeg to extract a single JPEG frame at native resolution. The caller
 // must decrypt encrypted input before passing it here.
 func (g *Generator) Generate(ctx context.Context, input io.Reader, inputSize int64) ([]byte, error) {
 	if g.maxInputSize > 0 && inputSize > g.maxInputSize {
@@ -118,7 +118,6 @@ func runFFmpeg(ctx context.Context, input, output, seekTo string) error {
 		"-ss", seekTo,
 		"-i", input,
 		"-vframes", "1",
-		"-vf", "scale=360:-2",
 		"-q:v", "5",
 		"-f", "image2",
 		"-y",
