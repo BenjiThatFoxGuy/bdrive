@@ -375,7 +375,8 @@ func (a *apiService) BotTokenCleanup(ctx context.Context) (*BotTokenCleanupResul
 	}
 
 	for _, bot := range bots {
-		userName := knownBotUsername(ctx, peerStorage, bot.BotId)
+		botID := botIDFromToken(bot.BotId, bot.Token)
+		userName := knownBotUsername(ctx, peerStorage, botID)
 
 		info, err := tgc.GetBotInfo(ctx, a.db, a.cache, &a.cnf.TG, bot.Token)
 		switch {
@@ -384,21 +385,24 @@ func (a *apiService) BotTokenCleanup(ctx context.Context) (*BotTokenCleanupResul
 				userName = info.UserName
 			}
 			result.Valid = append(result.Valid, BotTokenInfo{
-				BotId:    bot.BotId,
+				BotId:    botID,
 				UserName: userName,
+				token:    bot.Token,
 			})
 		case isDefiniteBotAuthFailure(err):
 			result.Invalid = append(result.Invalid, BotTokenInfo{
-				BotId:    bot.BotId,
+				BotId:    botID,
 				UserName: userName,
 				Error:    err.Error(),
+				token:    bot.Token,
 			})
 		default:
 			// Rate-limited, network failure, timeout, ... keep the token.
 			result.Kept = append(result.Kept, BotTokenInfo{
-				BotId:    bot.BotId,
+				BotId:    botID,
 				UserName: userName,
 				Error:    err.Error(),
+				token:    bot.Token,
 			})
 		}
 	}
@@ -437,6 +441,8 @@ func isDefiniteBotAuthFailure(err error) bool {
 		"AUTH_TOKEN_INVALID",
 		"AUTH_TOKEN_INVALIDX",
 		"AUTH_TOKEN_EXPIRED",
+		"ACCESS_TOKEN_INVALID",
+		"ACCESS_TOKEN_EXPIRED",
 		"BOT_INVALID",
 	) {
 		return true
@@ -456,19 +462,37 @@ func isDefiniteBotAuthFailure(err error) bool {
 	return false
 }
 
+// botIDFromToken falls back to the ID encoded in the token itself when the
+// database row does not have one (older rows were saved with bot_id 0). A bot
+// token is "<bot id>:<secret>", so the prefix identifies the bot without
+// revealing the secret.
+func botIDFromToken(stored int64, token string) int64 {
+	if stored != 0 {
+		return stored
+	}
+	prefix, _, ok := strings.Cut(token, ":")
+	if !ok {
+		return stored
+	}
+	id, err := strconv.ParseInt(prefix, 10, 64)
+	if err != nil {
+		return stored
+	}
+	return id
+}
+
 // removeBots deletes the given bots from the database and drops their cached
 // peers so nothing keeps pointing at a token that no longer works.
 func (a *apiService) removeBots(ctx context.Context, userId int64, peerStorage *tgstorage.PeerStorage, bots []BotTokenInfo) error {
-	ids := make([]int64, 0, len(bots))
+	// Delete by token: it is the primary key and always correct, unlike bot_id,
+	// which older rows may have left at zero.
 	for _, bot := range bots {
-		ids = append(ids, bot.BotId)
-	}
-
-	if err := a.db.Where("user_id = ? AND bot_id IN ?", userId, ids).Delete(&models.Bot{}).Error; err != nil {
-		return errors.Wrap(err, "delete bots")
-	}
-
-	for _, bot := range bots {
+		if bot.token == "" {
+			continue
+		}
+		if err := a.db.Where("user_id = ? AND token = ?", userId, bot.token).Delete(&models.Bot{}).Error; err != nil {
+			return errors.Wrap(err, "delete bot")
+		}
 		if err := peerStorage.Delete(ctx, storage.PeerKey{Kind: dialogs.User, ID: bot.BotId}); err != nil {
 			return errors.Wrap(err, "delete bot peer")
 		}
@@ -506,6 +530,9 @@ type BotTokenInfo struct {
 	BotId    int64  `json:"bot_id"`
 	UserName string `json:"user_name,omitempty"`
 	Error    string `json:"error,omitempty"`
+	// token is used server-side to delete the row precisely. It is
+	// unexported, so it never reaches the JSON response.
+	token string
 }
 
 // BotTokenCleanupResult is the outcome of a bot token cleanup run.
