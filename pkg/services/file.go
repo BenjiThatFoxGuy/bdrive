@@ -1795,6 +1795,13 @@ func (e *extendedService) FilesStream(w http.ResponseWriter, r *http.Request, fi
 	}
 	setupFailed := false
 	defer func() { finish(setupFailed) }()
+	fileKey := fmt.Sprintf("file:%d:%s", session.UserId, fileId)
+	finishFile, err := streamSetupAdmission.Begin(ctx, fileKey)
+	if err != nil {
+		writeStreamError(w, err)
+		return
+	}
+	defer func() { finishFile(false) }()
 
 	file, err := cache.Fetch(ctx, e.api.cache, cache.Key("files", fileId), 0, func() (*models.File, error) {
 		var result models.File
@@ -1866,6 +1873,7 @@ func (e *extendedService) FilesStream(w http.ResponseWriter, r *http.Request, fi
 	prepare := func() {
 		setupTimer.Stop()
 		finish(false)
+		finishFile(false)
 		w.Header().Set("Content-Type", contentType)
 		w.Header().Set("Content-Length", strconv.FormatInt(contentLength, 10))
 		w.Header().Set("ETag", fmt.Sprintf("\"%s\"", md5.FromString(fileId+strconv.FormatInt(*file.Size, 10))))
@@ -1935,6 +1943,9 @@ func (e *extendedService) FilesStream(w http.ResponseWriter, r *http.Request, fi
 		logger.Error("stream.failed", zap.Error(err), zap.Bool("committed", committed))
 		setupFailed = streamStatus(err) == 503 && !errors.Is(err, context.Canceled)
 		if committed {
+			if setupFailed {
+				streamSetupAdmission.Cooldown(fileKey)
+			}
 			// Abort on the HTTP goroutine, not inside gotd. net/http resets HTTP/2
 			// streams or closes HTTP/1 connections without appending plaintext media.
 			panic(http.ErrAbortHandler)
