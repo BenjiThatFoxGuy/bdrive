@@ -36,27 +36,36 @@ func getParts(ctx context.Context, client *telegram.Client, c cache.Cacher, file
 			return nil, err
 		}
 		parts := []types.Part{}
-		for i, message := range messages {
-			switch item := message.(type) {
-			case *tg.Message:
-				media, ok := item.Media.(*tg.MessageMediaDocument)
-				if !ok {
-					continue
-				}
-				document, ok := media.Document.(*tg.Document)
-				if !ok {
-					continue
-				}
-				part := types.Part{
-					ID:   int64((*file.Parts)[i].ID),
-					Size: document.Size,
-					Salt: (*file.Parts)[i].Salt.Value,
-				}
-				if file.IsEncrypted() {
-					part.DecryptedSize, _ = crypt.DecryptedSize(document.Size)
-				}
-				parts = append(parts, part)
+		documents := make(map[int]*tg.Document, len(messages))
+		for _, message := range messages {
+			item, ok := message.(*tg.Message)
+			if !ok || item == nil {
+				continue
 			}
+			media, ok := item.Media.(*tg.MessageMediaDocument)
+			if !ok || media == nil {
+				continue
+			}
+			document, ok := media.Document.(*tg.Document)
+			if !ok || document == nil || document.Size <= 0 {
+				continue
+			}
+			documents[item.ID] = document
+		}
+		for _, descriptor := range *file.Parts {
+			document, ok := documents[descriptor.ID]
+			if !ok {
+				continue
+			}
+			part := types.Part{ID: int64(descriptor.ID), Size: document.Size, Salt: descriptor.Salt.Value}
+			if file.IsEncrypted() {
+				var err error
+				part.DecryptedSize, err = crypt.DecryptedSize(document.Size)
+				if err != nil || part.DecryptedSize <= 0 {
+					return nil, models.ErrInvalidFile
+				}
+			}
+			parts = append(parts, part)
 		}
 		if len(parts) != len(*file.Parts) {
 			logger := logging.Component("FILE")
@@ -65,7 +74,7 @@ func getParts(ctx context.Context, client *telegram.Client, c cache.Cacher, file
 				zap.String("file_name", file.Name),
 				zap.Int("expected", len(*file.Parts)),
 				zap.Int("actual", len(parts)))
-			return nil, errors.New("file parts mismatch")
+			return nil, errors.Join(models.ErrInvalidFile, errors.New("file parts mismatch"))
 		}
 		return parts, nil
 	})

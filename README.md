@@ -50,6 +50,8 @@ This section tracks functional changes made in this fork relative to [tgdrive/te
 
 - **Added: ffmpeg-based video thumbnails.** Video files now display a thumbnail in the file browser. On first view, the server downloads the video, extracts a single JPEG frame with ffmpeg (at 1 second, falling back to 0 for short clips), and uploads the thumbnail to the same Telegram channel as the original media. Subsequent requests serve the cached thumbnail directly. Encrypted videos get encrypted thumbnails, decrypted transparently on serve. Thumbnails are invalidated on content replacement and cleaned up by the file-deletion cron job. The Docker image now includes ffmpeg (switched from scratch to alpine:3.20). Requires an imgproxy instance. ([bdrive#05e2aa5](https://github.com/BenjiThatFoxGuy/bdrive/commit/05e2aa5))
 
+- **Fixed: mount stream failures no longer restart the server.** Malformed file descriptors are rejected before Telegram access, startup session-database outages return `503` with `Retry-After` instead of invalid-credential responses, and bounded admission plus cooldown prevents reconnecting mounts from multiplying failed setup attempts. Authentication and the first bounded media read complete before a successful streaming response is sent; later failures terminate the stream without appending error text.
+
 ## Contributing
 
 Feel free to contribute to this project.See [CONTRIBUTING.md](CONTRIBUTING.md) for more information.

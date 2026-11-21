@@ -2,7 +2,9 @@ package reader
 
 import (
 	"context"
+	"fmt"
 	"io"
+	"math"
 	"sync"
 
 	"github.com/gotd/td/tg"
@@ -62,6 +64,38 @@ func NewReader(ctx context.Context,
 	config *config.TGConfig,
 	botID string,
 ) (io.ReadCloser, error) {
+	if file == nil || file.ChannelId == nil || *file.ChannelId == 0 || len(parts) == 0 || start < 0 || end < start || end == math.MaxInt64 {
+		return nil, models.ErrInvalidFile
+	}
+	if config == nil || config.Stream.Concurrency <= 0 || config.Stream.Buffers < 0 || config.Stream.ChunkTimeout <= 0 {
+		return nil, fmt.Errorf("invalid stream reader configuration")
+	}
+	if file.Size != nil && (end >= *file.Size || *file.Size < 0) {
+		return nil, models.ErrInvalidFile
+	}
+	var total, unit int64
+	for i, part := range parts {
+		size := part.Size
+		if file.IsEncrypted() {
+			size = part.DecryptedSize
+			if part.Salt == "" {
+				return nil, models.ErrInvalidFile
+			}
+		}
+		if part.ID <= 0 || size <= 0 || part.Size <= 0 || total > math.MaxInt64-size {
+			return nil, models.ErrInvalidFile
+		}
+		if i == 0 {
+			unit = size
+		}
+		if (i < len(parts)-1 && size != unit) || size > unit {
+			return nil, models.ErrInvalidFile
+		}
+		total += size
+	}
+	if end >= total {
+		return nil, models.ErrInvalidFile
+	}
 
 	size := parts[0].Size
 	if file.IsEncrypted() {
@@ -149,11 +183,16 @@ func (r *Reader) getPartReader() (io.ReadCloser, error) {
 		err    error
 	)
 
-	reader, err = newTGMultiReader(r.ctx, currentRange.Start, currentRange.End, r.config, chunkSrc)
+	if !r.file.IsEncrypted() {
+		return newTGMultiReader(r.ctx, currentRange.Start, currentRange.End, r.config, chunkSrc)
+	}
 
 	if r.file.IsEncrypted() {
 		salt := r.parts[r.ranges[r.pos].PartNo].Salt
-		cipher, _ := crypt.NewCipher(r.config.Uploads.EncryptionKey, salt)
+		cipher, cipherErr := crypt.NewCipher(r.config.Uploads.EncryptionKey, salt)
+		if cipherErr != nil {
+			return nil, cipherErr
+		}
 		reader, err = cipher.DecryptDataSeek(r.ctx,
 			func(ctx context.Context,
 				underlyingOffset,
