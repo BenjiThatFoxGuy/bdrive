@@ -387,8 +387,6 @@ func (e *extendedService) finishThumb(ctx context.Context, w http.ResponseWriter
 		var uploadErr error
 		msgID, uploadErr = uploadThumbToChannel(ctx, client.API(), thumbChannelId, uploadData, e.api.cnf.TG.Uploads.Threads, file.Name)
 		if uploadErr != nil {
-			// The original channel might be full or restricted. Try the user's
-			// default channel as a fallback for any upload error.
 			logger.Warn("thumb.upload_failed_trying_default", zap.Error(uploadErr))
 			defaultCh, chErr := e.api.channelManager.GetChannel(ctx, session.UserId)
 			if chErr != nil || defaultCh == thumbChannelId {
