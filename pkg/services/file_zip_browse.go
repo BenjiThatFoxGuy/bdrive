@@ -15,10 +15,10 @@ import (
 	"github.com/tgdrive/teldrive/internal/auth"
 	"github.com/tgdrive/teldrive/internal/cache"
 	"github.com/tgdrive/teldrive/internal/logging"
+	"github.com/tgdrive/teldrive/internal/reader"
 	"github.com/tgdrive/teldrive/internal/tgc"
 	"github.com/tgdrive/teldrive/internal/zipbrowse"
 	"github.com/tgdrive/teldrive/pkg/models"
-	"github.com/tgdrive/teldrive/internal/reader"
 )
 
 // ZipBrowse lists the contents of a zip file at a given inner path.

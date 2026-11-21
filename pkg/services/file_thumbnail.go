@@ -381,23 +381,19 @@ func (e *extendedService) finishThumb(ctx context.Context, w http.ResponseWriter
 		return
 	}
 
+	thumbName := strings.TrimSuffix(file.Name, filepath.Ext(file.Name)) + "_thumb.jpg"
 	var msgID int
 	thumbChannelId := *file.ChannelId
-	tgc.RunWithAuth(ctx, client, token, func(ctx context.Context) error {
-		var uploadErr error
-		msgID, uploadErr = uploadThumbToChannel(ctx, client.API(), thumbChannelId, uploadData, e.api.cnf.TG.Uploads.Threads, file.Name)
-		if uploadErr != nil {
-			logger.Warn("thumb.upload_failed_trying_default", zap.Error(uploadErr))
-			defaultCh, chErr := e.api.channelManager.GetChannel(ctx, session.UserId)
-			if chErr != nil || defaultCh == thumbChannelId {
-				return uploadErr
-			}
-			msgID, uploadErr = uploadThumbToChannel(ctx, client.API(), defaultCh, uploadData, e.api.cnf.TG.Uploads.Threads, file.Name)
-			if uploadErr != nil {
-				return uploadErr
-			}
-			thumbChannelId = defaultCh
+	tgc.RunWithAuth(ctx, client, token, func(authCtx context.Context) error {
+		chResult, msgIDResult, upErr := e.api.uploadWithChannelFallback(
+			authCtx, client, session.UserId, thumbChannelId, uploadData,
+			int64(len(uploadData)), thumbName, e.api.cnf.TG.Uploads.Threads,
+		)
+		if upErr != nil {
+			return upErr
 		}
+		msgID = msgIDResult
+		thumbChannelId = chResult
 		return nil
 	})
 
