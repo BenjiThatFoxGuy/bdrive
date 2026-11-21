@@ -3,6 +3,7 @@ package tgc
 import (
 	"context"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/cenkalti/backoff/v4"
@@ -10,6 +11,7 @@ import (
 	"github.com/gotd/contrib/clock"
 	"github.com/gotd/contrib/middleware/floodwait"
 	"github.com/gotd/contrib/middleware/ratelimit"
+	tdclock "github.com/gotd/td/clock"
 	"github.com/gotd/td/session"
 	"github.com/gotd/td/telegram"
 	"github.com/gotd/td/telegram/dcs"
@@ -25,6 +27,32 @@ import (
 	"golang.org/x/time/rate"
 	"gorm.io/gorm"
 )
+
+// ntpClockOnce makes sure the NTP probe happens at most once per process: every
+// Telegram client would otherwise repeat a UDP query that may be blocked.
+var ntpClockOnce sync.Once
+
+// ntpClock caches the NTP-synchronised clock, or nil when NTP is unreachable.
+var ntpClock tdclock.Clock
+
+// ntpClockOrSystem returns the NTP clock when it can be reached, and the system
+// clock otherwise. UDP/123 is blocked on plenty of hosts and NTP is only a
+// accuracy nicety, so failing to reach it must never stop a client from being
+// built.
+func ntpClockOrSystem() tdclock.Clock {
+	ntpClockOnce.Do(func() {
+		c, err := clock.NewNTP()
+		if err != nil {
+			logging.Component("TG").Warn("ntp.unavailable", zap.Error(err))
+			return
+		}
+		ntpClock = c
+	})
+	if ntpClock != nil {
+		return ntpClock
+	}
+	return tdclock.System
+}
 
 func newClient(ctx context.Context, config *config.TGConfig, handler telegram.UpdateHandler, storage session.Storage, middlewares ...telegram.Middleware) (*telegram.Client, error) {
 
@@ -66,12 +94,7 @@ func newClient(ctx context.Context, config *config.TGConfig, handler telegram.Up
 		Logger:         logger,
 	}
 	if config.Ntp {
-		c, err := clock.NewNTP()
-		if err != nil {
-			return nil, errors.Wrap(err, "create clock")
-		}
-		opts.Clock = c
-
+		opts.Clock = ntpClockOrSystem()
 	}
 
 	return telegram.NewClient(config.AppId, config.AppHash, opts), nil

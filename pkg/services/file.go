@@ -207,7 +207,10 @@ func (a *apiService) FilesCategoryStats(ctx context.Context) ([]api.CategoryStat
 func (a *apiService) FilesCopy(ctx context.Context, req *api.FileCopy, params api.FilesCopyParams) (*api.File, error) {
 	userId := auth.GetUser(ctx)
 
-	client, _ := tgc.AuthClient(ctx, &a.cnf.TG, auth.GetJWTUser(ctx).TgSession, a.newMiddlewares(ctx, 5)...)
+	client, cerr := tgc.AuthClient(ctx, &a.cnf.TG, auth.GetJWTUser(ctx).TgSession, a.newMiddlewares(ctx, 5)...)
+	if cerr != nil {
+		return nil, &apiError{err: cerr}
+	}
 
 	var res []models.File
 

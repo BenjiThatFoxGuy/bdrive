@@ -132,11 +132,15 @@ func (a *apiService) AuthLogin(ctx context.Context, session *api.SessionCreate) 
 
 func (a *apiService) AuthLogout(ctx context.Context) (*api.AuthLogoutNoContent, error) {
 	authUser := auth.GetJWTUser(ctx)
-	client, _ := tgc.AuthClient(ctx, &a.cnf.TG, authUser.TgSession, a.newMiddlewares(ctx, 5)...)
-	tgc.RunWithAuth(ctx, client, "", func(ctx context.Context) error {
-		_, err := client.API().AuthLogOut(ctx)
-		return err
-	})
+	client, cerr := tgc.AuthClient(ctx, &a.cnf.TG, authUser.TgSession, a.newMiddlewares(ctx, 5)...)
+	if cerr == nil {
+		tgc.RunWithAuth(ctx, client, "", func(ctx context.Context) error {
+			_, err := client.API().AuthLogOut(ctx)
+			return err
+		})
+	}
+	// The session is cleared locally either way; a failed client build must not
+	// leave the user stuck with a live session.
 	a.db.Where("hash = ?", authUser.Hash).Delete(&models.Session{})
 	userId, _ := strconv.ParseInt(authUser.Subject, 10, 64)
 	a.cache.Delete(ctx, cache.KeySessionHash(authUser.Hash), cache.KeyUserSessions(userId),
