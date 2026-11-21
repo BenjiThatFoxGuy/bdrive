@@ -48,6 +48,8 @@ This section tracks functional changes made in this fork relative to [tgdrive/te
 
 - **Changed: archive browsing config is now a master switch + per-format flags.** The single `files.enable-zip-browsing` flag has been replaced by a hierarchy: `files.enable-archive-browsing` (master switch, default on), plus per-format flags `files.enable-zip-browsing` (default **off**), `files.enable-cbz-browsing` (default on), and `files.enable-unitypkg-browsing` (default on). Each format requires both the master switch and its own flag to be enabled. Zip browsing now defaults to off since it's a heavier operation on arbitrary archives. ([bdrive#TBD](https://github.com/BenjiThatFoxGuy/bdrive))
 
+- **Added: ffmpeg-based video thumbnails.** Video files now display a thumbnail in the file browser. On first view, the server downloads the video, extracts a single JPEG frame with ffmpeg (at 1 second, falling back to 0 for short clips), and uploads the thumbnail to the same Telegram channel as the original media. Subsequent requests serve the cached thumbnail directly. Encrypted videos get encrypted thumbnails, decrypted transparently on serve. Thumbnails are invalidated on content replacement and cleaned up by the file-deletion cron job. The Docker image now includes ffmpeg (switched from scratch to alpine:3.20). Requires an imgproxy instance. ([bdrive#05e2aa5](https://github.com/BenjiThatFoxGuy/bdrive/commit/05e2aa5))
+
 ## Contributing
 
 Feel free to contribute to this project.See [CONTRIBUTING.md](CONTRIBUTING.md) for more information.

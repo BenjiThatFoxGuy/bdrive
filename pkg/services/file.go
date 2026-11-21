@@ -1717,6 +1717,8 @@ func (a *apiService) FilesUpdate(ctx context.Context, req *api.FileUpdate, param
 	if len(req.Parts) > 0 {
 		keys = append(keys, cache.KeyFileMessages(params.ID))
 		a.cache.DeletePattern(ctx, cache.KeyFileLocationPattern(params.ID))
+		// Invalidate cached thumbnail when file content changes.
+		a.db.Where("file_id = ?", params.ID).Delete(&models.Thumbnail{})
 	}
 	a.cache.Delete(ctx, keys...)
 

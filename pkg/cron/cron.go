@@ -133,6 +133,14 @@ func (c *CronService) cleanFiles(ctx context.Context) {
 		}
 
 		client, _ := tgc.AuthClient(ctx, &c.cnf.TG, row.Session, middlewares...)
+
+		// Include thumbnail Telegram message IDs for deletion.
+		var thumbMsgIds []int
+		c.db.Table("teldrive.thumbnails").
+			Where("file_id IN ?", fileIds).
+			Pluck("message_id", &thumbMsgIds)
+		ids = append(ids, thumbMsgIds...)
+
 		err := tgc.DeleteMessages(ctx, client, row.ChannelId, ids)
 
 		if err != nil {
