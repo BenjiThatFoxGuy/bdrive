@@ -85,6 +85,23 @@ func TestStartupAuthHTTPStormRecoversWhenDatabaseReady(t *testing.T) {
 	}
 	now = now.Add(31 * time.Second)
 	ready.Store(true)
+	var successes atomic.Int32
+	for range 100 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			code := request(token)
+			if code == 204 {
+				successes.Add(1)
+			} else if code != 503 {
+				t.Errorf("ready storm status %d", code)
+			}
+		}()
+	}
+	wg.Wait()
+	if successes.Load() == 0 {
+		t.Fatal("no request recovered after readiness")
+	}
 	if code := request(token); code != 204 {
 		t.Fatalf("ready status %d", code)
 	}
