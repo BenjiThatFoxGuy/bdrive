@@ -1,5 +1,6 @@
+-- +goose Up
 CREATE TABLE IF NOT EXISTS teldrive.thumbnails (
-  id UUID PRIMARY KEY DEFAULT teldrive.uuid7(),
+  id UUID PRIMARY KEY DEFAULT public.uuid7(),
   file_id UUID NOT NULL REFERENCES teldrive.files(id) ON DELETE CASCADE,
   user_id BIGINT NOT NULL,
   channel_id BIGINT NOT NULL,
@@ -12,3 +13,6 @@ CREATE TABLE IF NOT EXISTS teldrive.thumbnails (
   UNIQUE(file_id)
 );
 CREATE INDEX IF NOT EXISTS idx_thumbnails_file_id ON teldrive.thumbnails(file_id);
+
+-- +goose Down
+DROP TABLE IF EXISTS teldrive.thumbnails;
