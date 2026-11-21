@@ -225,10 +225,15 @@ func (e *extendedService) generateThumb(w http.ResponseWriter, r *http.Request, 
 	}
 	ch := make(chan result, 1)
 
+	// The goroutine runs inside the RunWithAuth callback so the gotd client stays
+	// alive for the entire download+ffmpeg+upload. done is closed when the
+	// goroutine finishes, which lets the callback return and disconnect the client.
+	// The result travels through ch (buffered 1) to the HTTP handler below.
+	done := make(chan struct{})
 	tgc.RunWithAuth(ctx, client, token, func(ctx context.Context) error {
 		go func() {
-			// A cached copy of the video skips the Telegram download entirely, so
-			// generating a thumbnail twice costs nothing the second time.
+			defer close(done)
+
 			src, closeSrc, err := e.openForThumbnail(ctx, client, file, botID)
 			if err != nil {
 				ch <- result{err: err}
@@ -236,14 +241,12 @@ func (e *extendedService) generateThumb(w http.ResponseWriter, r *http.Request, 
 			}
 			defer closeSrc.Close()
 
-			// Generate JPEG thumbnail via ffmpeg.
 			jpegBytes, err := thumbGenerator.Generate(ctx, src, *file.Size)
 			if err != nil {
 				ch <- result{err: err}
 				return
 			}
 
-			// Prepare upload data (encrypt if original is encrypted).
 			uploadData := jpegBytes
 			var salt string
 			if file.IsEncrypted() {
@@ -270,14 +273,12 @@ func (e *extendedService) generateThumb(w http.ResponseWriter, r *http.Request, 
 				}
 			}
 
-			// Upload thumbnail to same channel as original.
 			msgID, err := uploadThumbToChannel(ctx, client.API(), *file.ChannelId, uploadData, e.api.cnf.TG.Uploads.Threads)
 			if err != nil {
 				ch <- result{err: err}
 				return
 			}
 
-			// Persist to DB.
 			thumb := models.Thumbnail{
 				FileId:    file.ID,
 				UserId:    session.UserId,
@@ -294,6 +295,9 @@ func (e *extendedService) generateThumb(w http.ResponseWriter, r *http.Request, 
 
 			ch <- result{jpeg: jpegBytes, msgID: msgID}
 		}()
+
+		// Keep the client alive until the goroutine finishes.
+		<-done
 		return nil
 	})
 
