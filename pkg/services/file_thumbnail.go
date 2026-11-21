@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -213,8 +214,10 @@ func (e *extendedService) generateThumb(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 
-	// --- Unencrypted path: ffmpeg reads the public stream URL directly ---
-	if !file.IsEncrypted() && e.api.cnf.Server.BaseURL != "" {
+	// --- URL path: ffmpeg reads the public stream URL directly ---
+	// The stream endpoint decrypts on the fly, so this works for both encrypted
+	// and unencrypted files.
+	if e.api.cnf.Server.BaseURL != "" {
 		streamURL := e.buildStreamURL(file, session)
 		logger.Debug("thumb.url_mode", zap.String("url", streamURL))
 
@@ -379,10 +382,23 @@ func (e *extendedService) finishThumb(ctx context.Context, w http.ResponseWriter
 	}
 
 	var msgID int
+	thumbChannelId := *file.ChannelId
 	tgc.RunWithAuth(ctx, client, token, func(ctx context.Context) error {
 		var uploadErr error
-		msgID, uploadErr = uploadThumbToChannel(ctx, client.API(), *file.ChannelId, uploadData, e.api.cnf.TG.Uploads.Threads)
-		return uploadErr
+		msgID, uploadErr = uploadThumbToChannel(ctx, client.API(), thumbChannelId, uploadData, e.api.cnf.TG.Uploads.Threads, file.Name)
+		if uploadErr != nil {
+			logger.Warn("thumb.upload_failed_trying_default", zap.Error(uploadErr))
+			defaultCh, chErr := e.api.channelManager.GetChannel(ctx, session.UserId)
+			if chErr != nil || defaultCh == thumbChannelId {
+				return uploadErr
+			}
+			msgID, uploadErr = uploadThumbToChannel(ctx, client.API(), defaultCh, uploadData, e.api.cnf.TG.Uploads.Threads, file.Name)
+			if uploadErr != nil {
+				return uploadErr
+			}
+			thumbChannelId = defaultCh
+		}
+		return nil
 	})
 
 	if msgID == 0 {
@@ -394,7 +410,7 @@ func (e *extendedService) finishThumb(ctx context.Context, w http.ResponseWriter
 	thumb := models.Thumbnail{
 		FileId:    file.ID,
 		UserId:    session.UserId,
-		ChannelId: *file.ChannelId,
+		ChannelId: thumbChannelId,
 		MessageId: msgID,
 		Encrypted: file.IsEncrypted(),
 		Salt:      salt,
@@ -424,17 +440,18 @@ func (e *extendedService) finishThumb(ctx context.Context, w http.ResponseWriter
 
 // uploadThumbToChannel uploads a small blob to a Telegram channel and returns
 // the message ID of the resulting document.
-func uploadThumbToChannel(ctx context.Context, client *tg.Client, channelId int64, data []byte, threads int) (int, error) {
+func uploadThumbToChannel(ctx context.Context, client *tg.Client, channelId int64, data []byte, threads int, originalName string) (int, error) {
+	thumbName := strings.TrimSuffix(originalName, filepath.Ext(originalName)) + "_thumb.jpg"
 	channel, err := tgc.GetChannelById(ctx, client, channelId)
 	if err != nil {
 		return 0, err
 	}
 	u := uploader.NewUploader(client).WithThreads(threads).WithPartSize(512 * 1024)
-	upload, err := u.Upload(ctx, uploader.NewUpload("thumb.jpg", bytes.NewReader(data), int64(len(data))))
+	upload, err := u.Upload(ctx, uploader.NewUpload(thumbName, bytes.NewReader(data), int64(len(data))))
 	if err != nil {
 		return 0, err
 	}
-	doc := message.UploadedDocument(upload).Filename("thumb.jpg").ForceFile(true)
+	doc := message.UploadedDocument(upload).Filename(thumbName).ForceFile(true)
 	sender := message.NewSender(client)
 	target := sender.To(&tg.InputPeerChannel{ChannelID: channel.ChannelID, AccessHash: channel.AccessHash})
 	res, err := target.Media(ctx, doc)
