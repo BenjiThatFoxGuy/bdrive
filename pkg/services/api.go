@@ -241,12 +241,24 @@ type extendedMiddleware struct {
 }
 
 func (m *extendedMiddleware) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	// Video thumbnail endpoint (not in OGen spec).
+	// Thumbnail endpoints (not in OGen spec - raw binary streaming).
 	if r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/files/thumb/") {
 		fileId := strings.TrimPrefix(r.URL.Path, "/files/thumb/")
 		if fileId != "" {
 			m.srv.FileThumbnail(w, r, fileId)
 			return
+		}
+	}
+	if r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/shares/") && strings.Contains(r.URL.Path, "/files/") && strings.HasSuffix(r.URL.Path, "/thumb") {
+		rest := strings.TrimPrefix(r.URL.Path, "/shares/")
+		parts := strings.Split(rest, "/files/")
+		if len(parts) == 2 {
+			shareId := parts[0]
+			fileId := strings.TrimSuffix(parts[1], "/thumb")
+			if shareId != "" && fileId != "" {
+				m.srv.ShareFileThumbnail(w, r, shareId, fileId)
+				return
+			}
 		}
 	}
 

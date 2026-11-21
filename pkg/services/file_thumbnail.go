@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -22,6 +23,7 @@ import (
 	"github.com/tgdrive/teldrive/internal/cache"
 	"github.com/tgdrive/teldrive/internal/crypt"
 	"github.com/tgdrive/teldrive/internal/logging"
+	"github.com/tgdrive/teldrive/internal/psdconv"
 	"github.com/tgdrive/teldrive/internal/reader"
 	"github.com/tgdrive/teldrive/internal/tgc"
 	"github.com/tgdrive/teldrive/internal/thumbnail"
@@ -44,6 +46,23 @@ func thumbLockFor(fileID string) *sync.Mutex {
 	return l.(*sync.Mutex)
 }
 
+// ShareFileThumbnail validates the share link then serves the thumbnail via
+// the same cached pipeline as owned files.
+func (e *extendedService) ShareFileThumbnail(w http.ResponseWriter, r *http.Request, shareId, fileId string) {
+	share, err := e.api.validFileShare(r, shareId)
+	if err != nil {
+		if errors.Is(err, ErrEmptyAuth) {
+			w.Header().Set("WWW-Authenticate", `Basic realm="Restricted"`)
+		}
+		http.Error(w, err.Error(), http.StatusUnauthorized)
+		return
+	}
+	r = r.WithContext(context.WithValue(r.Context(), shareUserKey{}, share.UserId))
+	e.FileThumbnail(w, r, fileId)
+}
+
+type shareUserKey struct{}
+
 // FileThumbnail serves (or generates on-demand) a JPEG thumbnail for a video
 // file. imgproxy fetches this endpoint and resizes the result for the UI.
 func (e *extendedService) FileThumbnail(w http.ResponseWriter, r *http.Request, fileId string) {
@@ -52,9 +71,16 @@ func (e *extendedService) FileThumbnail(w http.ResponseWriter, r *http.Request, 
 
 	// --- Auth (same pattern as FilesStream) ---
 	var session *models.Session
+	isShare := false
+	if shareUID, ok := r.Context().Value(shareUserKey{}).(int64); ok {
+		session = &models.Session{UserId: shareUID}
+		isShare = true
+	}
 
 	authHash := r.URL.Query().Get("hash")
-	if authHash == "" {
+	if session != nil {
+		// share auth already resolved the session
+	} else if authHash == "" {
 		cookie, err := r.Cookie(authCookieName)
 		if err != nil {
 			http.Error(w, "missing token or hash", http.StatusUnauthorized)
@@ -67,7 +93,7 @@ func (e *extendedService) FileThumbnail(w http.ResponseWriter, r *http.Request, 
 		}
 		userId, _ := strconv.ParseInt(user.Subject, 10, 64)
 		session = &models.Session{UserId: userId, Session: user.TgSession}
-	} else {
+	} else if authHash != "" {
 		var err error
 		session, err = auth.GetSessionByHash(ctx, e.api.db, e.api.cache, authHash)
 		if err != nil {
@@ -89,9 +115,10 @@ func (e *extendedService) FileThumbnail(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 
-	// --- Must be a video ---
-	if file.Category == nil || *file.Category != "video" {
-		http.Error(w, "not a video file", http.StatusBadRequest)
+	// --- Must be a video or a PSD image ---
+	isPSD := psdconv.IsPSD(file.MimeType, file.Name)
+	if !isPSD && (file.Category == nil || *file.Category != "video") {
+		http.Error(w, "not a thumbnailable file", http.StatusBadRequest)
 		return
 	}
 
@@ -114,7 +141,7 @@ func (e *extendedService) FileThumbnail(w http.ResponseWriter, r *http.Request, 
 	}
 
 	// --- Generate, cache, and serve ---
-	e.generateThumb(w, r, file, session, logger)
+	e.generateThumb(w, r, file, session, logger, isPSD, isShare)
 }
 
 // openForThumbnail returns a reader over the whole decrypted file, preferring
@@ -143,7 +170,11 @@ func (e *extendedService) serveCachedThumb(w http.ResponseWriter, r *http.Reques
 	serve := func(data []byte) {
 		setEdgeCache(w, streamEdgeCacheSeconds(r))
 		w.Header().Set("ETag", `"`+thumb.FileId+`"`)
-		w.Header().Set("Content-Type", "image/jpeg")
+		mime := thumb.MimeType
+		if mime == "" {
+			mime = "image/jpeg"
+		}
+		w.Header().Set("Content-Type", mime)
 		thumbnail.NewSource(int64(len(data)), func(_ context.Context, start, end int64) (io.ReadCloser, error) {
 			return io.NopCloser(bytes.NewReader(data[start : end+1])), nil
 		}).ServeHTTP(w, r)
@@ -229,7 +260,7 @@ func (e *extendedService) serveCachedThumb(w http.ResponseWriter, r *http.Reques
 // files it gives ffmpeg the public stream URL directly, so the whole Telegram
 // download pipeline is bypassed. Encrypted files still need the full MTProto
 // download because ffmpeg cannot decrypt them.
-func (e *extendedService) generateThumb(w http.ResponseWriter, r *http.Request, file *models.File, session *models.Session, logger *zap.Logger) {
+func (e *extendedService) generateThumb(w http.ResponseWriter, r *http.Request, file *models.File, session *models.Session, logger *zap.Logger, isPSD, isShare bool) {
 	ctx := r.Context()
 
 	if file.Size == nil || *file.Size == 0 {
@@ -237,10 +268,10 @@ func (e *extendedService) generateThumb(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 
-	// --- URL path: ffmpeg reads the public stream URL directly ---
-	// The stream endpoint decrypts on the fly, so this works for both encrypted
-	// and unencrypted files.
-	if e.api.cnf.Server.BaseURL != "" {
+	// --- URL path: ffmpeg reads the public stream URL directly (videos only) ---
+	// PSD needs full bytes for proper compositing, and share sessions have no
+	// hash for the stream URL, so both go through the MTProto path below.
+	if e.api.cnf.Server.BaseURL != "" && !isPSD && !isShare {
 		streamURL := e.buildStreamURL(file, session)
 		logger.Debug("thumb.url_mode", zap.String("url", streamURL))
 
@@ -249,7 +280,7 @@ func (e *extendedService) generateThumb(w http.ResponseWriter, r *http.Request, 
 			logger.Warn("thumb.url_failed, falling back to mtproto", zap.Error(err))
 			// Fall through to the MTProto path below.
 		} else {
-			e.finishThumb(ctx, w, r, file, session, jpegBytes, logger)
+			e.finishThumb(ctx, w, r, file, session, jpegBytes, logger, false)
 			return
 		}
 	}
@@ -286,10 +317,21 @@ func (e *extendedService) generateThumb(w http.ResponseWriter, r *http.Request, 
 			}
 			defer closeSrc.Close()
 
-			jpegBytes, err := thumbGenerator.Generate(ctx, src, *file.Size)
-			if err != nil {
-				ch <- result{err: err}
-				return
+			var jpegBytes []byte
+			if isPSD {
+				buf, psdErr := psdconv.ToPNG(ctx, src)
+				if psdErr != nil {
+					ch <- result{err: psdErr}
+					return
+				}
+				jpegBytes = buf.Bytes()
+			} else {
+				var genErr error
+				jpegBytes, genErr = thumbGenerator.Generate(ctx, src, *file.Size)
+				if genErr != nil {
+					ch <- result{err: genErr}
+					return
+				}
 			}
 
 			ch <- result{jpeg: jpegBytes}
@@ -307,7 +349,7 @@ func (e *extendedService) generateThumb(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 
-	e.finishThumb(ctx, w, r, file, session, res.jpeg, logger)
+	e.finishThumb(ctx, w, r, file, session, res.jpeg, logger, isPSD)
 }
 
 // resolveStreamClient creates a Telegram client for streaming/downloading,
@@ -363,8 +405,12 @@ func (e *extendedService) buildStreamURL(file *models.File, session *models.Sess
 // finishThumb uploads the generated JPEG to Telegram, persists the DB record,
 // caches the bytes locally, and serves the response. Shared between the URL
 // path and the MTProto path.
-func (e *extendedService) finishThumb(ctx context.Context, w http.ResponseWriter, r *http.Request, file *models.File, session *models.Session, jpegBytes []byte, logger *zap.Logger) {
+func (e *extendedService) finishThumb(ctx context.Context, w http.ResponseWriter, r *http.Request, file *models.File, session *models.Session, jpegBytes []byte, logger *zap.Logger, isPSD bool) {
 	uploadData := jpegBytes
+	mimeType := "image/jpeg"
+	if isPSD {
+		mimeType = "image/png"
+	}
 	var salt string
 
 	if file.IsEncrypted() {
@@ -434,7 +480,7 @@ func (e *extendedService) finishThumb(ctx context.Context, w http.ResponseWriter
 		Encrypted: file.IsEncrypted(),
 		Salt:      salt,
 		Size:      int64(len(uploadData)),
-		MimeType:  "image/jpeg",
+		MimeType:  mimeType,
 	}
 	if dbErr := e.api.db.Create(&thumb).Error; dbErr != nil {
 		logger.Error("thumb.db_save_failed", zap.Error(dbErr))
@@ -451,7 +497,7 @@ func (e *extendedService) finishThumb(ctx context.Context, w http.ResponseWriter
 
 	setEdgeCache(w, streamEdgeCacheSeconds(r))
 	w.Header().Set("ETag", `"`+file.ID+`"`)
-	w.Header().Set("Content-Type", "image/jpeg")
+	w.Header().Set("Content-Type", mimeType)
 	thumbnail.NewSource(int64(len(jpegBytes)), func(_ context.Context, start, end int64) (io.ReadCloser, error) {
 		return io.NopCloser(bytes.NewReader(jpegBytes[start : end+1])), nil
 	}).ServeHTTP(w, r)
