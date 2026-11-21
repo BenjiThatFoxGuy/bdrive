@@ -2,7 +2,6 @@ package auth
 
 import (
 	"context"
-	"net/http"
 	"net/http/httptest"
 	"sync"
 	"sync/atomic"

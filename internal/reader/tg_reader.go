@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"runtime/debug"
 	"sync"
 	"time"
 
@@ -79,6 +80,8 @@ type tgMultiReader struct {
 	timeout     time.Duration
 	logger      *zap.Logger
 	closeOnce   sync.Once
+	failureMu   sync.Mutex
+	failure     error
 }
 
 func newTGMultiReader(
@@ -129,6 +132,12 @@ func (r *tgMultiReader) Read(p []byte) (int, error) {
 		select {
 		case cur, ok := <-r.bufferChan:
 			if !ok {
+				r.failureMu.Lock()
+				err := r.failure
+				r.failureMu.Unlock()
+				if err != nil {
+					return 0, err
+				}
 				return 0, ErrStreamAbandoned
 			}
 			r.cur = cur
@@ -153,7 +162,9 @@ func (r *tgMultiReader) fillBuffer() {
 
 	for r.currentPart < r.totalParts {
 		if err := r.fillBatch(); err != nil {
-			r.cancel()
+			r.failureMu.Lock()
+			r.failure = err
+			r.failureMu.Unlock()
 			return
 		}
 	}
@@ -166,7 +177,15 @@ func (r *tgMultiReader) fillBatch() error {
 	buffers := make([]*buffer, r.concurrency)
 
 	for i := 0; i < r.concurrency && r.currentPart+i < r.totalParts; i++ {
-		g.Go(func() error {
+		g.Go(func() (err error) {
+			// This worker owns only this request's chunk operation. Recover here,
+			// not on the HTTP goroutine, and propagate the failure through the reader.
+			defer func() {
+				if p := recover(); p != nil {
+					r.logger.Error("stream.chunk_panic", zap.ByteString("stack", debug.Stack()))
+					err = errors.New("stream chunk failed")
+				}
+			}()
 			chunkCtx, cancel := context.WithTimeout(ctx, r.timeout)
 			defer cancel()
 
@@ -178,13 +197,17 @@ func (r *tgMultiReader) fillBatch() error {
 				return err
 			}
 
-			if r.totalParts == 1 {
-				chunk = chunk[r.leftCut:r.rightCut]
-			} else if r.currentPart+i == 0 {
-				chunk = chunk[r.leftCut:]
-			} else if r.currentPart+i+1 == r.totalParts {
-				chunk = chunk[:r.rightCut]
+			left, right := int64(0), r.chunkSize
+			if r.currentPart+i == 0 {
+				left = r.leftCut
 			}
+			if r.currentPart+i+1 == r.totalParts {
+				right = r.rightCut
+			}
+			if left < 0 || right <= left || right > int64(len(chunk)) {
+				return io.ErrUnexpectedEOF
+			}
+			chunk = chunk[left:right]
 
 			buffers[i] = &buffer{buf: chunk}
 			return nil
