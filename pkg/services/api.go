@@ -227,6 +227,15 @@ type extendedMiddleware struct {
 }
 
 func (m *extendedMiddleware) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// Video thumbnail endpoint (not in OGen spec).
+	if r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/files/thumb/") {
+		fileId := strings.TrimPrefix(r.URL.Path, "/files/thumb/")
+		if fileId != "" {
+			m.srv.FileThumbnail(w, r, fileId)
+			return
+		}
+	}
+
 	// Archive virtual folder endpoints (not in OGen spec).
 	if r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/files/zip/") {
 		rest := strings.TrimPrefix(r.URL.Path, "/files/zip/")
