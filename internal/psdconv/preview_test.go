@@ -63,7 +63,9 @@ func TestLayerPreviewRejectsUnsupportedBlend(t *testing.T) {
 }
 
 func TestLayerPreviewLinearDodge(t *testing.T) {
-	fixture := bytes.Replace(layeredFixture(), []byte("8BIMnorm"), []byte("8BIMlddg"), 1)
+	fixture := layeredFixture()
+	// The second layer is the top (blue) layer; the first is the red backdrop.
+	copy(fixture[bytes.LastIndex(fixture, []byte("8BIMnorm")):], "8BIMlddg")
 	meta, err := InspectLayers(context.Background(), bytes.NewReader(fixture))
 	if err != nil {
 		t.Fatal(err)
