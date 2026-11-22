@@ -433,6 +433,27 @@ func (a *apiService) FilesCreate(ctx context.Context, fileIn *api.File) (*api.Fi
 					return nil, &apiError{err: errors.New("invalid part: part_id cannot be zero"), code: 400}
 				}
 			}
+
+			// Reject a create whose upload session has no parts for a non-zero file.
+			if len(uploads) == 0 && fileIn.Size.Value > 0 {
+				return nil, &apiError{err: errors.New("upload session has no parts; upload may still be in progress"), code: 409}
+			}
+
+			// Verify part numbers are contiguous from 1 and their sizes sum to
+			// the declared file size. A gap means a part upload failed silently;
+			// a size mismatch means partial upload or a stale session.
+			if len(uploads) > 0 {
+				var partsTotal int64
+				for i, upload := range uploads {
+					if upload.PartNo != i+1 {
+						return nil, &apiError{err: fmt.Errorf("upload session is incomplete: expected part %d, found %d", i+1, upload.PartNo), code: 409}
+					}
+					partsTotal += upload.Size
+				}
+				if fileIn.Size.Value > 0 && partsTotal != fileIn.Size.Value && !(uploads[0].Encrypted && partsTotal > fileIn.Size.Value) {
+					return nil, &apiError{err: fmt.Errorf("upload size mismatch: parts total %d, declared %d", partsTotal, fileIn.Size.Value), code: 409}
+				}
+			}
 		}
 
 		// Handle parts - either from direct input or fetch by uploadId
