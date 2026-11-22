@@ -102,6 +102,7 @@ type FilesConfig struct {
 	ZipMaxFiles            int   `default:"10000" description:"Maximum files in a single zip download (0 disables the limit)"`
 	ZipMaxSize             int64 `default:"0" description:"Maximum total uncompressed bytes in a single zip download (0 disables the limit)"`
 	ZipMaxConcurrent       int   `default:"4" description:"Maximum zip downloads streaming concurrently (0 disables the limit)"`
+	PreviewServerMode      bool  `default:"false" description:"Route all PSD previews through the server compositor (opt-in; off keeps the browser fast path for Chrome/Firefox)"`
 	Cache                  FileCacheConfig
 }
 

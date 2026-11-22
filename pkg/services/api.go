@@ -69,6 +69,8 @@ func (a *apiService) ConfigConfig(ctx context.Context) (*api.ServerConfig, error
 		ZipDownloadEnabled: a.cnf.Files.EnableZipDownload,
 		ShortlinksEnabled:  a.cnf.Shortlinks.Enabled,
 		EncryptionEnabled:  a.cnf.TG.Uploads.EncryptionKey != "",
+		PsdServerPreview:   a.cnf.Files.PreviewServerMode,
+		PsdServerCapable:   true,
 	}
 	if a.cnf.Shortlinks.Domain != "" {
 		res.ShortlinkDomain = api.NewOptString(a.cnf.Shortlinks.Domain)
