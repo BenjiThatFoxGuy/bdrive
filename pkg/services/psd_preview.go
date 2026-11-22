@@ -55,8 +55,8 @@ func (a *apiService) psdPreview(ctx context.Context, id, mode string, overrides 
 	select {
 	case psdPreviewSlot <- struct{}{}:
 		defer func() { <-psdPreviewSlot }()
-	default:
-		return nil, &apiError{code: http.StatusTooManyRequests, err: errors.New("PSD renderer is busy")}
+	case <-ctx.Done():
+		return nil, ctx.Err()
 	}
 	ctx, cancel := context.WithTimeout(ctx, 90*time.Second)
 	defer cancel()
