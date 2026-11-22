@@ -1703,6 +1703,12 @@ func (a *apiService) FilesUpdate(ctx context.Context, req *api.FileUpdate, param
 			}
 		}
 
+		// Invalidate cached thumbnail when file content changes so the next
+		// request regenerates it from the new bytes.
+		if isContentUpdate {
+			tx.Where("file_id = ?", params.ID).Delete(&models.Thumbnail{})
+		}
+
 		// Delete uploads after successful update
 		if uploadId != "" {
 			if err := tx.Where("upload_id = ? AND user_id = ?", uploadId, userId).Delete(&models.Upload{}).Error; err != nil {
