@@ -51,6 +51,42 @@ func TestLayerPreviewPNG(t *testing.T) {
 	}
 }
 
+func TestLayerPreviewRejectsUnsupportedBlend(t *testing.T) {
+	for _, mode := range []string{"diss", "????"} {
+		t.Run(mode, func(t *testing.T) {
+			fixture := bytes.Replace(layeredFixture(), []byte("8BIMnorm"), []byte("8BIM"+mode), 1)
+			if _, err := InspectLayers(context.Background(), bytes.NewReader(fixture)); err != ErrUnsupportedPreview {
+				t.Fatalf("inspect unsupported blend %q: got %v, want %v", mode, err, ErrUnsupportedPreview)
+			}
+		})
+	}
+}
+
+func TestLayerPreviewLinearDodge(t *testing.T) {
+	fixture := layeredFixture()
+	// The second layer is the top (blue) layer; the first is the red backdrop.
+	copy(fixture[bytes.LastIndex(fixture, []byte("8BIMnorm")):], "8BIMlddg")
+	meta, err := InspectLayers(context.Background(), bytes.NewReader(fixture))
+	if err != nil {
+		t.Fatal(err)
+	}
+	overrides := make(map[int]bool)
+	for _, l := range meta.Layers {
+		overrides[l.ID] = true
+	}
+	data, err := RenderLayers(context.Background(), bytes.NewReader(fixture), overrides)
+	if err != nil {
+		t.Fatal(err)
+	}
+	img, err := png.Decode(bytes.NewReader(data))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := color.NRGBAModel.Convert(img.At(0, 0)), (color.NRGBA{R: 255, B: 255, A: 255}); got != want {
+		t.Fatalf("Linear Dodge over blue: got %v, want %v", got, want)
+	}
+}
+
 func layeredFixture() []byte {
 	var file, info bytes.Buffer
 	u16 := func(b *bytes.Buffer, v uint16) { _ = binary.Write(b, binary.BigEndian, v) }

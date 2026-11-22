@@ -100,6 +100,13 @@ func InspectLayers(ctx context.Context, input io.ReadSeeker) (PreviewMetadata, e
 		result := make([]PreviewLayer, 0, len(layers))
 		for i := len(layers) - 1; i >= 0; i-- {
 			l := &layers[i]
+			mode := l.BlendMode
+			if l.Folder() {
+				mode = l.SectionDividerSetting.BlendMode
+			}
+			if !supportedPreviewBlend(mode) {
+				return nil, ErrUnsupportedPreview
+			}
 			for _, rect := range []image.Rectangle{l.Rect, l.Mask.Rect} {
 				if rect.Min.X < -30000 || rect.Min.Y < -30000 || rect.Max.X > 60000 || rect.Max.Y > 60000 || rect.Dx() < 0 || rect.Dy() < 0 || rect.Dx() > 30000 || rect.Dy() > 30000 {
 					return nil, ErrUnsupportedPreview
@@ -126,6 +133,23 @@ func InspectLayers(ctx context.Context, input io.ReadSeeker) (PreviewMetadata, e
 	}
 	meta.Layers, err = visit(decoded.Layer, 0)
 	return meta, err
+}
+
+// Keep this list in sync with oov/psd/composite's draw.go. An unrecognized
+// mode reaches a nil drawer in the compositor. Pass Through is handled in the
+// compositor's group code (and normalized to Normal for image layers).
+func supportedPreviewBlend(mode psd.BlendMode) bool {
+	switch mode {
+	case psd.BlendModePassThrough, psd.BlendModeNormal,
+		psd.BlendModeDarken, psd.BlendModeMultiply, psd.BlendModeColorBurn, psd.BlendModeLinearBurn, psd.BlendModeDarkerColor,
+		psd.BlendModeLighten, psd.BlendModeScreen, psd.BlendModeColorDodge, psd.BlendModeLinearDodge, psd.BlendModeLighterColor,
+		psd.BlendModeOverlay, psd.BlendModeSoftLight, psd.BlendModeHardLight, psd.BlendModeLinearLight, psd.BlendModeVividLight,
+		psd.BlendModePinLight, psd.BlendModeHardMix, psd.BlendModeDifference, psd.BlendModeExclusion, psd.BlendModeSubtract,
+		psd.BlendModeDivide, psd.BlendModeHue, psd.BlendModeSaturation, psd.BlendModeColor, psd.BlendModeLuminosity:
+		return true
+	default:
+		return false
+	}
 }
 
 // RenderLayers composites the requested visibility changes and emits a lossless
