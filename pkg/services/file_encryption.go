@@ -176,6 +176,9 @@ func (a *apiService) transformFile(ctx context.Context, fileID string, encrypt b
 		return err
 	}
 
+	// Invalidate cached thumbnail so the next request regenerates from new bytes.
+	a.db.WithContext(ctx).Where("file_id = ?", fileID).Delete(&models.Thumbnail{})
+
 	// Invalidate caches so the next request reads the new bytes.
 	_ = a.cache.Delete(ctx,
 		cache.Key("files", fileID),
