@@ -217,7 +217,12 @@ func (e *extendedService) downloadFullFile(ctx context.Context, file *models.Fil
 			return nil
 		}
 
+		// The goroutine must be awaited before returning from the callback,
+		// otherwise RunWithAuth exits and gotd cancels the context, killing
+		// the download with "context cancelled".
+		done := make(chan struct{})
 		go func() {
+			defer close(done)
 			defer lr.Close()
 			var buf bytes.Buffer
 			_, copyErr := io.Copy(&buf, lr)
@@ -227,6 +232,7 @@ func (e *extendedService) downloadFullFile(ctx context.Context, file *models.Fil
 				ch <- dlResult{&buf, nil}
 			}
 		}()
+		<-done
 		return nil
 	})
 
