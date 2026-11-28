@@ -57,6 +57,16 @@ func (a *apiService) UploadsPartsById(ctx context.Context, params api.UploadsPar
 		Find(&parts).Error; err != nil {
 		return nil, &apiError{err: err}
 	}
+	// A completed session has its upload rows deleted. If the client replayed
+	// the upload after losing a response, restore the committed parts so it
+	// can resume instead of pushing the same bytes to Telegram again.
+	if len(parts) == 0 {
+		restored, err := a.restoreCommittedParts(ctx, userId, params.ID)
+		if err != nil {
+			return nil, &apiError{err: err}
+		}
+		parts = restored
+	}
 	return mapper.ToUploadOut(parts), nil
 }
 
@@ -190,6 +200,40 @@ func (a *apiService) UploadsUpload(ctx context.Context, req *api.UploadsUploadRe
 		zap.Int("part_no", params.PartNo),
 		zap.Int64("size", params.ContentLength),
 	)
+
+	// Replay guard. A retry that lost the response to a successful part POST
+	// (or to the final file create) must not push the same bytes to Telegram a
+	// second time; that is what leaves duplicate messages in the channel.
+	var liveParts []models.Upload
+	if err := a.db.WithContext(ctx).
+		Where("upload_id = ? AND user_id = ?", params.ID, userId).
+		Find(&liveParts).Error; err != nil {
+		return nil, &apiError{err: err}
+	}
+	for _, part := range liveParts {
+		if part.PartNo != params.PartNo {
+			continue
+		}
+		// A size mismatch means the session id was reused for different
+		// content, so the old part must not be returned as this one.
+		if part.Size == params.ContentLength {
+			logger.Debug("upload.replay.part_exists", zap.Int("part_id", part.PartId))
+			return replayUploadPart(part), nil
+		}
+		break
+	}
+	if len(liveParts) == 0 {
+		restored, err := a.restoreCommittedParts(ctx, userId, params.ID)
+		if err != nil {
+			return nil, &apiError{err: err}
+		}
+		for _, part := range restored {
+			if part.PartNo == params.PartNo && part.Size == params.ContentLength {
+				logger.Debug("upload.replay.committed_part", zap.Int("part_id", part.PartId))
+				return replayUploadPart(part), nil
+			}
+		}
+	}
 
 	channelId := params.ChannelId.Value
 	if channelId == 0 {

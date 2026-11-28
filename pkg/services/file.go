@@ -402,6 +402,30 @@ func (a *apiService) FilesCreate(ctx context.Context, fileIn *api.File) (*api.Fi
 		fileDB.MimeType = "drive/folder"
 		fileDB.Parts = nil
 	case api.FileTypeFile:
+		// Idempotent replay: if this session was already committed to an
+		// active file and has no live parts, return that file instead of a
+		// 409. A 409 makes the client retry the whole upload, which is what
+		// duplicates the messages in the Telegram storage channel.
+		if fileIn.UploadId.Value != "" && len(fileIn.Parts) == 0 {
+			committed, cerr := a.committedUploadFile(ctx, userId, fileIn.UploadId.Value)
+			if cerr != nil {
+				return nil, &apiError{err: cerr}
+			}
+			if committed != nil && (fileIn.Size.Value == 0 || (committed.Size != nil && *committed.Size == fileIn.Size.Value)) {
+				var live int64
+				if err := a.db.WithContext(ctx).Model(&models.Upload{}).
+					Where("upload_id = ? AND user_id = ?", fileIn.UploadId.Value, userId).
+					Count(&live).Error; err != nil {
+					return nil, &apiError{err: err}
+				}
+				if live == 0 {
+					logging.FromContext(ctx).Info("files.create.replay",
+						zap.String("upload_id", fileIn.UploadId.Value),
+						zap.String("file_id", committed.ID))
+					return mapper.ToFileOut(*committed), nil
+				}
+			}
+		}
 		if fileIn.ChannelId.Value == 0 {
 			channelId, err = a.channelManager.CurrentChannel(ctx, userId)
 			if err != nil {
@@ -576,8 +600,14 @@ func (a *apiService) FilesCreate(ctx context.Context, fileIn *api.File) (*api.Fi
 			return err
 		}
 
-		// Delete uploads after successful file creation
+		// Snapshot the session before dropping its rows, so a replay of the
+		// same session can be answered without a second Telegram upload.
+		// This runs inside the file-creation transaction, so a failed create
+		// never records a commit.
 		if uploadId != "" {
+			if err := recordUploadCommit(tx, userId, uploadId, fileDB.ID, fileIn.Size.Value, uploads); err != nil {
+				return err
+			}
 			if err := tx.Where("upload_id = ? AND user_id = ?", uploadId, userId).Delete(&models.Upload{}).Error; err != nil {
 				return err
 			}
