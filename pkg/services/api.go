@@ -199,7 +199,14 @@ func (a *apiService) NewError(ctx context.Context, err error) *api.ErrorStatusCo
 			message = apiError.Error()
 		}
 		logger := logging.Component("API")
-		logger.Error("request.failed", zap.Error(apiError.err))
+		if code == http.StatusConflict {
+			// 409 is a control signal for retrying clients, not a server
+			// failure. Logging every retry at error level buried the real
+			// errors in a flood of duplicate lines.
+			logger.Debug("request.conflict", zap.Error(apiError.err))
+		} else {
+			logger.Error("request.failed", zap.Error(apiError.err))
+		}
 	}
 	return &api.ErrorStatusCode{StatusCode: code, Response: api.Error{Code: code, Message: message}}
 }

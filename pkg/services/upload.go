@@ -210,6 +210,7 @@ func (a *apiService) UploadsUpload(ctx context.Context, req *api.UploadsUploadRe
 		Find(&liveParts).Error; err != nil {
 		return nil, &apiError{err: err}
 	}
+	staleSession := false
 	for _, part := range liveParts {
 		if part.PartNo != params.PartNo {
 			continue
@@ -220,9 +221,19 @@ func (a *apiService) UploadsUpload(ctx context.Context, req *api.UploadsUploadRe
 			logger.Debug("upload.replay.part_exists", zap.Int("part_id", part.PartId))
 			return replayUploadPart(part), nil
 		}
+		staleSession = true
 		break
 	}
-	if len(liveParts) == 0 {
+	if staleSession {
+		// Dropping only the conflicting row would leave two rows claiming
+		// part 1 with different ids, and create would then 409 forever on
+		// "expected part 2, found 1". Retire the whole live session instead;
+		// the commit record is untouched, so replays still reconcile.
+		logger.Debug("upload.replay.stale_session", zap.Int("part_no", params.PartNo))
+		if err := a.retireStaleUploadSession(ctx, userId, params.ID); err != nil {
+			return nil, &apiError{err: err}
+		}
+	} else if len(liveParts) == 0 {
 		restored, err := a.restoreCommittedParts(ctx, userId, params.ID)
 		if err != nil {
 			return nil, &apiError{err: err}
