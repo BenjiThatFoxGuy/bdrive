@@ -14,6 +14,35 @@ import (
 	"github.com/tgdrive/teldrive/pkg/models"
 )
 
+// uploadPartsAreContiguous reports whether the rows can form a valid upload
+// session: every part number from 1..n appears exactly once. Late retries of a
+// part POST can leave two rows with the same part number and none with the
+// next one; such a set can never be committed and would 409 forever.
+func uploadPartsAreContiguous(uploads []models.Upload) bool {
+	seen := make(map[int]bool, len(uploads))
+	for _, upload := range uploads {
+		if upload.PartNo < 1 || seen[upload.PartNo] {
+			return false
+		}
+		seen[upload.PartNo] = true
+	}
+	for i := 1; i <= len(uploads); i++ {
+		if !seen[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// retireStaleUploadSession drops live rows that cannot belong to a valid
+// upload. Keeping them would leave duplicate part numbers in the session and
+// make every create fail with "expected part N, found M" forever.
+func (a *apiService) retireStaleUploadSession(ctx context.Context, userId int64, uploadId string) error {
+	return a.db.WithContext(ctx).
+		Where("upload_id = ? AND user_id = ?", uploadId, userId).
+		Delete(&models.Upload{}).Error
+}
+
 // committedUploadFile looks up the file an upload session was folded into.
 // Only an active file counts: once the file is deleted the session is free to
 // be reused by a genuinely new upload.

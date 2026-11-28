@@ -412,13 +412,22 @@ func (a *apiService) FilesCreate(ctx context.Context, fileIn *api.File) (*api.Fi
 				return nil, &apiError{err: cerr}
 			}
 			if committed != nil && (fileIn.Size.Value == 0 || (committed.Size != nil && *committed.Size == fileIn.Size.Value)) {
-				var live int64
-				if err := a.db.WithContext(ctx).Model(&models.Upload{}).
+				var live []models.Upload
+				if err := a.db.WithContext(ctx).
 					Where("upload_id = ? AND user_id = ?", fileIn.UploadId.Value, userId).
-					Count(&live).Error; err != nil {
+					Order("part_no").Find(&live).Error; err != nil {
 					return nil, &apiError{err: err}
 				}
-				if live == 0 {
+				// No live rows is a plain replay. Malformed rows - duplicate
+				// part numbers left by late retries of a part POST - are
+				// replay residue too: they can never form a valid session and
+				// would fail validation with 409 on every retry.
+				if len(live) == 0 || !uploadPartsAreContiguous(live) {
+					if len(live) > 0 {
+						if err := a.retireStaleUploadSession(ctx, userId, fileIn.UploadId.Value); err != nil {
+							return nil, &apiError{err: err}
+						}
+					}
 					logging.FromContext(ctx).Info("files.create.replay",
 						zap.String("upload_id", fileIn.UploadId.Value),
 						zap.String("file_id", committed.ID))

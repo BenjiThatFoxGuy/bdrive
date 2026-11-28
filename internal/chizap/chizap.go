@@ -20,6 +20,7 @@ type Skipper func(ctx context.Context) bool
 type ZapLogger interface {
 	Info(msg string, fields ...zapcore.Field)
 	Error(msg string, fields ...zapcore.Field)
+	Debug(msg string, fields ...zapcore.Field)
 }
 
 type Config struct {
@@ -106,7 +107,13 @@ func ChizapWithConfig(logger ZapLogger, conf *Config) func(next http.Handler) ht
 						fields = append(fields, conf.Context(r.Context())...)
 					}
 
-					if ww.Status() >= 400 {
+					if ww.Status() >= 500 {
+						logger.Error("", fields...)
+					} else if ww.Status() == http.StatusConflict {
+						// 409 is a retry signal for clients, not a server fault.
+						// At error level each retry buried the useful logs.
+						logger.Debug("", fields...)
+					} else if ww.Status() >= 400 {
 						logger.Error("", fields...)
 					} else {
 						if zl, ok := logger.(*zap.Logger); ok {

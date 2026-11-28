@@ -168,6 +168,48 @@ func TestUploadCommitUpsert(t *testing.T) {
 	assert.Equal(t, int64(20), commits[0].FileSize)
 }
 
+func TestUploadPartsAreContiguous(t *testing.T) {
+	row := func(no int) models.Upload { return models.Upload{PartNo: no, PartId: no} }
+	for _, tt := range []struct {
+		name   string
+		parts  []models.Upload
+		contig bool
+	}{
+		{"single part", []models.Upload{row(1)}, true},
+		{"two parts", []models.Upload{row(1), row(2)}, true},
+		{"duplicate part one", []models.Upload{row(1), row(1)}, false},
+		{"gap", []models.Upload{row(1), row(3)}, false},
+		{"empty", nil, true},
+		{"zero part number", []models.Upload{row(0)}, false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.contig, uploadPartsAreContiguous(tt.parts))
+		})
+	}
+}
+
+func TestUploadUploadRetiresConflictingPartRows(t *testing.T) {
+	db := openUploadReplayTestDB(t)
+	claims := &types.JWTClaims{}
+	claims.Subject = strconv.FormatInt(uploadReplayTestUser, 10)
+	ctx := auth.WithClaims(context.Background(), claims)
+
+	stale := models.Upload{
+		UploadId: "stale-session", UserId: uploadReplayTestUser, Name: "song.flac",
+		PartNo: 1, PartId: 999, Size: 100,
+	}
+	require.NoError(t, db.Create(&stale).Error)
+
+	a := &apiService{db: db, cnf: &config.ServerCmdConfig{}}
+	require.NoError(t, a.retireStaleUploadSession(ctx, uploadReplayTestUser, "stale-session"))
+
+	var left int64
+	require.NoError(t, db.Model(&models.Upload{}).
+		Where("upload_id = ? AND user_id = ?", "stale-session", uploadReplayTestUser).
+		Count(&left).Error)
+	assert.Zero(t, left, "a conflicting part must retire the session, not leave a duplicate part number")
+}
+
 func TestUploadEndpointsReplayFromCommit(t *testing.T) {
 	db := openUploadReplayTestDB(t)
 	claims := &types.JWTClaims{}
